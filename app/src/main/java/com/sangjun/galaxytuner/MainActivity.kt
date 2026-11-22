@@ -371,7 +371,7 @@ private fun BatteryCard(
             ) {
                 Metric(
                     label = "효율 (BSOH)",
-                    value = info.asoc?.let { "$it%" } ?: "-",
+                    value = info.efficiency?.let { "$it%" } ?: "-",
                     accent = MaterialTheme.colorScheme.primary
                 )
                 Metric(
@@ -395,7 +395,9 @@ private fun BatteryCard(
 
             InfoRow("충전 상태", info.status ?: "-")
             InfoRow("배터리 상태", info.health ?: "-")
-            InfoRow("원본 ASOC", info.asoc?.let { "$it" } ?: "없음 (dumpsys)")
+            InfoRow("ASOC", info.asoc?.let { "$it%" } ?: "-")
+            InfoRow("BSOH (dumpsys)", info.bsoh?.let { "$it%" } ?: "-")
+            InfoRow("최초 사용일", info.firstUseDate ?: "-")
             InfoRow("원본 Usage", info.usageRaw?.let { "$it (÷100 회)" } ?: "없음 (dumpsys)")
             info.cycleCountSys?.let { InfoRow("sysfs cycle", it) }
             info.fgAsocSys?.let { InfoRow("sysfs fg_asoc", it) }

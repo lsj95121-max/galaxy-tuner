@@ -4,7 +4,7 @@
 루팅 없이, 셸(uid 2000) 권한만 빌려 `dumpsys` / `settings` / sysfs 를 읽고 씁니다.
 
 - 패키지: `com.sangjun.galaxytuner`
-- 버전: 1.0.1 (debug)
+- 버전: 1.0.2 (debug)
 - minSdk 29 (Android 10) / targetSdk 34
 - Kotlin + Jetpack Compose + Material 3
 
@@ -12,8 +12,11 @@
 
 ### 1) 배터리 사이클 · 효율(BSOH)
 - `dumpsys battery` 에서 삼성 전용 필드를 파싱
-  - `mSavedBatteryAsoc` → 효율(BSOH) %
-  - `mSavedBatteryUsage` → 0.01% 단위이므로 `값 / 100` 회가 사이클 수
+  - `mSavedBatteryBsoh` → 효율(BSOH) % (없으면 `mSavedBatteryAsoc` 로 대체)
+  - `mSavedBatteryAsoc` → ASOC % (별도 표시)
+  - `mSavedBatteryUsage` → 0.01% 단위이므로 `값 / 100` 회가 사이클 수 (예: `44832` → `448.32회`)
+  - `battery FirstUseDate` → 최초 사용일 (예: `[20250609]` → `2025-06-09`)
+  - 위 값들은 One UI 가 `[100]` 처럼 대괄호로 감싸 출력해도 숫자를 읽어 냅니다
   - `level`, `temperature`(0.1°C 단위), `voltage`(mV), `status`, `health`
 - `/sys/class/power_supply/battery/` 의 `cycle_count`, `fg_asoc`, `charge_full`, `charge_full_design` 도 함께 시도
 - 카드 하단 **원본 dumpsys 보기** 토글로 날것 출력 확인 가능
@@ -56,9 +59,9 @@
 
 ## APK 설치
 
-- 빌드된 파일: `GalaxyTuner-v1.0.1-debug.apk`
+- 빌드된 파일: `GalaxyTuner-v1.0.2-debug.apk`
 - 폰에서 파일을 열어 "출처를 알 수 없는 앱 설치" 허용 후 설치 (debug 서명 키스토어가 리포에 포함되어 있어 재빌드해도 같은 서명으로 업데이트 설치 가능)
-- `adb install -r GalaxyTuner-v1.0.1-debug.apk` 도 가능
+- `adb install -r GalaxyTuner-v1.0.2-debug.apk` 도 가능
 
 ## 빌드
 
@@ -70,14 +73,12 @@ gradle assembleDebug
 # 결과: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-GitHub Actions (`.github/workflows/build-apk.yml`): push 또는 수동 실행 시
-`actions/setup-java@v4` (temurin 17) + `gradle/actions/setup-gradle@v4` (Gradle 8.7) 로 `gradle assembleDebug` →
-Artifact 업로드 + `softprops/action-gh-release@v2` 로 `v1.0.1` 릴리즈에 `GalaxyTuner-v1.0.1-debug.apk` 첨부.
+APK 는 로컬에서 빌드해 GitHub 릴리즈(`v1.0.2`) 에 첨부합니다 (`.github/workflows/` 는 두지 않습니다).
 
 ## 한계 / 주의
 
 - 주사율 모드는 기기·One UI 버전에 따라 다르게 동작합니다. 일부 기기는 `min_refresh_rate`/`peak_refresh_rate` 를 무시하고 `refresh_rate_mode` 만 봅니다.
 - 80/96Hz 는 `peak_refresh_rate` 값으로 넣는 방식이라 패널이 지원하는 단계(60/96/120 등)로 스냅될 수 있습니다. 적용 후 카드에 다시 읽힌 `peak_refresh_rate` 값을 확인하세요.
 - 셔터음은 통신사/지역 펌웨어 정책에 따라 카메라 앱이 강제로 무시할 수 있습니다(한국판은 대개 0 으로 동작).
-- `mSavedBatteryAsoc`/`mSavedBatteryUsage` 는 삼성 펌웨어가 제공할 때만 나옵니다. 없으면 원본 dumpsys 로 확인.
+- `mSavedBatteryBsoh`/`mSavedBatteryAsoc`/`mSavedBatteryUsage`/`battery FirstUseDate` 는 삼성 펌웨어가 제공할 때만 나옵니다. 없으면 원본 dumpsys 로 확인.
 - 값 변경은 셸 권한으로 시스템 설정을 바꾸므로, 되돌리려면 같은 화면에서 기본값을 다시 선택하면 됩니다.

@@ -4,7 +4,9 @@ package com.sangjun.galaxytuner
 data class Loaded<T>(val value: T?, val error: String? = null)
 
 data class BatteryInfo(
+    val bsoh: Int?,
     val asoc: Int?,
+    val firstUseDate: String?,
     val usageRaw: Int?,
     val level: Int?,
     val status: String?,
@@ -19,6 +21,9 @@ data class BatteryInfo(
 ) {
     /** mSavedBatteryUsage is stored in 0.01% steps, so 12345 means 12,345% = 123.45 cycles. */
     val cycles: Double? get() = usageRaw?.let { it / 100.0 }
+
+    /** The headline efficiency: BSOH when One UI reports it, otherwise ASOC. */
+    val efficiency: Int? get() = bsoh ?: asoc
 
     val fullChargeMah: Int?
         get() {
@@ -54,6 +59,27 @@ object Tuner {
     private fun field(raw: String, key: String): String? {
         val regex = Regex("(?m)^\\s*" + Regex.escape(key) + ":\\s*(.+?)\\s*$")
         return regex.find(raw)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Reads a numeric dumpsys field.
+     *
+     * One UI prints some fields as `mSavedBatteryAsoc: [100]` and others as `mSavedBatteryBsoh: 95`,
+     * so the digits are picked out of the value instead of converting the whole string.
+     */
+    private fun numField(raw: String, key: String): Int? {
+        val value = field(raw, key) ?: return null
+        return Regex("-?\\d+").find(value)?.value?.toIntOrNull()
+    }
+
+    /** `battery FirstUseDate: [20250609]` -> 2025-06-09 (any other shape is kept as printed). */
+    private fun firstUseDate(raw: String): String? {
+        val digits = Regex("\\d{8}").find(field(raw, "battery FirstUseDate") ?: "")?.value
+        return if (digits != null) {
+            "${digits.substring(0, 4)}-${digits.substring(4, 6)}-${digits.substring(6, 8)}"
+        } else {
+            field(raw, "battery FirstUseDate")
+        }
     }
 
     private fun keyValue(raw: String, key: String): String? {
@@ -105,9 +131,11 @@ object Tuner {
 
         val temperature = field(raw, "temperature")?.toDoubleOrNull()?.let { it / 10.0 }
         val info = BatteryInfo(
-            asoc = field(raw, "mSavedBatteryAsoc")?.toIntOrNull(),
-            usageRaw = field(raw, "mSavedBatteryUsage")?.toIntOrNull(),
-            level = field(raw, "level")?.toIntOrNull(),
+            bsoh = numField(raw, "mSavedBatteryBsoh"),
+            asoc = numField(raw, "mSavedBatteryAsoc"),
+            firstUseDate = firstUseDate(raw),
+            usageRaw = numField(raw, "mSavedBatteryUsage"),
+            level = numField(raw, "level"),
             status = batteryStatusLabel(field(raw, "status")),
             temperatureC = temperature,
             voltageMv = field(raw, "voltage")?.toIntOrNull(),
