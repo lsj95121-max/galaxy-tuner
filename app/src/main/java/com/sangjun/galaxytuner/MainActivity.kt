@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -174,10 +175,10 @@ fun TunerScreen() {
                         busy = false
                     }
                 },
-                onPeak = { peak ->
+                onPreset = { hz ->
                     scope.launch {
                         busy = true
-                        val result = Tuner.applyPeak(peak)
+                        val result = Tuner.applyPreset(hz)
                         refresh = Tuner.readRefresh()
                         message = result
                         busy = false
@@ -441,10 +442,12 @@ private fun RefreshCard(
     loaded: Loaded<RefreshInfo>?,
     busy: Boolean,
     onMode: (Int) -> Unit,
-    onPeak: (String) -> Unit
+    onPreset: (Int) -> Unit
 ) {
     SectionCard(title = "화면 주사율") {
         val info = loaded?.value
+        val currentPeak = info?.peak?.toDoubleOrNull()
+
         if (info == null) {
             Text(
                 text = loaded?.error ?: "아직 읽지 않았습니다.",
@@ -459,20 +462,59 @@ private fun RefreshCard(
             InfoRow("peak_refresh_rate", info.peak ?: "null")
         }
 
-        Text("모드 전환", style = MaterialTheme.typography.labelMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { onMode(0) }, enabled = !busy) { Text("60Hz 고정") }
-            Button(onClick = { onMode(2) }, enabled = !busy) { Text("120Hz 적응형") }
+        Text("주사율 선택 (peak_refresh_rate)", style = MaterialTheme.typography.labelMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            listOf(60, 80, 96, 120).forEach { hz ->
+                val selected = currentPeak != null && kotlin.math.abs(currentPeak - hz) < 0.5
+                if (selected) {
+                    Button(
+                        onClick = { onPreset(hz) },
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+                    ) { Text("${hz}Hz") }
+                } else {
+                    OutlinedButton(
+                        onClick = { onPreset(hz) },
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+                    ) { Text("${hz}Hz") }
+                }
+            }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onMode(1) }, enabled = !busy) { Text("120Hz 고정") }
-        }
+        Text(
+            text = "60Hz는 고정, 80/96/120Hz는 적응형(refresh_rate_mode=2)으로 적용되고 min은 60.0으로 맞춥니다.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
-        Text("최대 주사율 (peak_refresh_rate)", style = MaterialTheme.typography.labelMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onPeak("60.0") }, enabled = !busy) { Text("60.0") }
-            OutlinedButton(onClick = { onPeak("96.0") }, enabled = !busy) { Text("96.0") }
-            OutlinedButton(onClick = { onPeak("120.0") }, enabled = !busy) { Text("120.0") }
+        Text("모드 전환", style = MaterialTheme.typography.labelMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedButton(
+                onClick = { onMode(0) },
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+            ) { Text("60 고정") }
+            OutlinedButton(
+                onClick = { onMode(2) },
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+            ) { Text("120 적응") }
+            OutlinedButton(
+                onClick = { onMode(1) },
+                enabled = !busy,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+            ) { Text("120 고정") }
         }
     }
 }

@@ -164,11 +164,24 @@ object Tuner {
         return runChange(cmd, "주사율 모드 ${modeLabelFor(mode)} 적용")
     }
 
-    /** Changes only peak_refresh_rate (60.0 / 96.0 / 120.0). */
-    suspend fun applyPeak(peak: String): String {
-        val cmd = "settings put system $SETTINGS_PEAK $peak"
-        return runChange(cmd, "최대 주사율 ${peak}Hz 적용")
+    /**
+     * Applies one of the Hz presets (60 / 80 / 96 / 120).
+     *
+     * peak_refresh_rate is the value One UI actually honours, so the preset sets it directly and
+     * keeps min_refresh_rate inside it. 60Hz also switches refresh_rate_mode to 0 (fixed 60),
+     * the others use adaptive mode 2 so the panel can drop down when the screen is idle.
+     */
+    suspend fun applyPreset(hz: Int): String {
+        val peak = hz.toDouble()
+        val min = if (peak < 60.0) peak else 60.0
+        val mode = if (hz <= 60) 0 else 2
+        val cmd = "settings put system $SETTINGS_MODE $mode; " +
+            "settings put system $SETTINGS_MIN ${fmt(min)}; " +
+            "settings put system $SETTINGS_PEAK ${fmt(peak)}"
+        return runChange(cmd, "주사율 ${hz}Hz 적용")
     }
+
+    private fun fmt(value: Double): String = String.format(java.util.Locale.US, "%.1f", value)
 
     private fun modeLabelFor(mode: Int): String = when (mode) {
         0 -> "60Hz 고정"
