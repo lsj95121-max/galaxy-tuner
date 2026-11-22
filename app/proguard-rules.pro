@@ -1,0 +1,4 @@
+-keep class rikka.shizuku.** { *; }
+-keep class com.sangjun.galaxytuner.IShellService { *; }
+-keep class com.sangjun.galaxytuner.IShellService$Stub { *; }
+-keep class com.sangjun.galaxytuner.ShellService { *; }
