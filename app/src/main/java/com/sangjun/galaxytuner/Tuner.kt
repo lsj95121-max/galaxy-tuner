@@ -56,6 +56,11 @@ object Tuner {
     private const val SETTINGS_PEAK = "peak_refresh_rate"
     private const val SHUTTER_KEY = "csc_pref_camera_forced_shuttersound_key"
 
+    /** refresh_rate_mode values One UI understands. */
+    private const val MODE_FIXED_60 = 0   // 60Hz 고정
+    private const val MODE_FIXED_MAX = 1  // peak_refresh_rate 고정
+    private const val MODE_ADAPTIVE = 2   // min ~ peak 사이 가변
+
     private fun field(raw: String, key: String): String? {
         val regex = Regex("(?m)^\\s*" + Regex.escape(key) + ":\\s*(.+?)\\s*$")
         return regex.find(raw)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
@@ -193,21 +198,60 @@ object Tuner {
     }
 
     /**
-     * Applies one of the Hz presets (60 / 80 / 96 / 120).
+     * Sets min_refresh_rate alone.
      *
-     * peak_refresh_rate is the value One UI actually honours, so the preset sets it directly and
-     * keeps min_refresh_rate inside it. 60Hz also switches refresh_rate_mode to 0 (fixed 60),
-     * the others use adaptive mode 2 so the panel can drop down when the screen is idle.
+     * 0 Hz means "no override": the key is deleted so the One UI default applies again.
+     * min/peak are only honoured in adaptive mode (fixed 60 / fixed max ignore both), so the mode
+     * is switched to 2 first. peak_refresh_rate is left untouched — the UI shows both values.
      */
-    suspend fun applyPreset(hz: Int): String {
-        val peak = hz.toDouble()
-        val min = if (peak < 60.0) peak else 60.0
-        val mode = if (hz <= 60) 0 else 2
-        val cmd = "settings put system $SETTINGS_MODE $mode; " +
-            "settings put system $SETTINGS_MIN ${fmt(min)}; " +
-            "settings put system $SETTINGS_PEAK ${fmt(peak)}"
-        return runChange(cmd, "주사율 ${hz}Hz 적용")
+    suspend fun setMinRefreshRate(hz: Int): String {
+        val cmd = "settings put system $SETTINGS_MODE $MODE_ADAPTIVE; " + rateCommand(SETTINGS_MIN, hz)
+        return runChange(cmd, "최소 주사율 ${rateLabel(hz)} 적용")
     }
+
+    /**
+     * Sets peak_refresh_rate alone, in adaptive mode (see [setMinRefreshRate]).
+     *
+     * One UI caps the panel at peak_refresh_rate, so raising it above min is what makes 80/120Hz
+     * available while the panel can still drop down when the screen is idle.
+     */
+    suspend fun setPeakRefreshRate(hz: Int): String {
+        val cmd = "settings put system $SETTINGS_MODE $MODE_ADAPTIVE; " + rateCommand(SETTINGS_PEAK, hz)
+        return runChange(cmd, "최대 주사율 ${rateLabel(hz)} 적용")
+    }
+
+    /**
+     * Pins the panel to one rate by writing the same value to min_refresh_rate and peak_refresh_rate.
+     *
+     * The mode that actually freezes the panel depends on the value: 60 uses mode 0 (fixed 60),
+     * above 60 uses mode 1 (fixed at peak), and below 60 there is no dedicated fixed mode, so it
+     * stays adaptive with min == peak. 0 Hz clears all three keys back to the One UI default.
+     */
+    suspend fun setFixedRefreshRate(hz: Int): String {
+        val cmd = if (hz <= 0) {
+            "settings delete system $SETTINGS_MODE; " +
+                "settings delete system $SETTINGS_MIN; " +
+                "settings delete system $SETTINGS_PEAK"
+        } else {
+            val mode = when {
+                hz == 60 -> MODE_FIXED_60
+                hz > 60 -> MODE_FIXED_MAX
+                else -> MODE_ADAPTIVE
+            }
+            val value = fmt(hz.toDouble())
+            "settings put system $SETTINGS_MODE $mode; " +
+                "settings put system $SETTINGS_MIN $value; " +
+                "settings put system $SETTINGS_PEAK $value"
+        }
+        return runChange(cmd, "고정 주사율 ${rateLabel(hz)} 적용")
+    }
+
+    /** Writes one rate key, or deletes it for 0 Hz (= system default). */
+    private fun rateCommand(key: String, hz: Int): String =
+        if (hz <= 0) "settings delete system $key"
+        else "settings put system $key ${fmt(hz.toDouble())}"
+
+    private fun rateLabel(hz: Int): String = if (hz <= 0) "해제(기본값)" else "${hz}Hz"
 
     private fun fmt(value: Double): String = String.format(java.util.Locale.US, "%.1f", value)
 

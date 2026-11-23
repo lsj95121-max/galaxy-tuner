@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFFB388FF),
@@ -175,10 +176,28 @@ fun TunerScreen() {
                         busy = false
                     }
                 },
-                onPreset = { hz ->
+                onMin = { hz ->
                     scope.launch {
                         busy = true
-                        val result = Tuner.applyPreset(hz)
+                        val result = Tuner.setMinRefreshRate(hz)
+                        refresh = Tuner.readRefresh()
+                        message = result
+                        busy = false
+                    }
+                },
+                onPeak = { hz ->
+                    scope.launch {
+                        busy = true
+                        val result = Tuner.setPeakRefreshRate(hz)
+                        refresh = Tuner.readRefresh()
+                        message = result
+                        busy = false
+                    }
+                },
+                onFixed = { hz ->
+                    scope.launch {
+                        busy = true
+                        val result = Tuner.setFixedRefreshRate(hz)
                         refresh = Tuner.readRefresh()
                         message = result
                         busy = false
@@ -444,11 +463,14 @@ private fun RefreshCard(
     loaded: Loaded<RefreshInfo>?,
     busy: Boolean,
     onMode: (Int) -> Unit,
-    onPreset: (Int) -> Unit
+    onMin: (Int) -> Unit,
+    onPeak: (Int) -> Unit,
+    onFixed: (Int) -> Unit
 ) {
     SectionCard(title = "화면 주사율") {
         val info = loaded?.value
-        val currentPeak = info?.peak?.toDoubleOrNull()
+        val currentMin = rateOf(info?.min)
+        val currentPeak = rateOf(info?.peak)
 
         if (info == null) {
             Text(
@@ -464,32 +486,28 @@ private fun RefreshCard(
             InfoRow("peak_refresh_rate", info.peak ?: "null")
         }
 
-        Text("주사율 선택 (peak_refresh_rate)", style = MaterialTheme.typography.labelMedium)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(60, 80, 96, 120).forEach { hz ->
-                val selected = currentPeak != null && kotlin.math.abs(currentPeak - hz) < 0.5
-                if (selected) {
-                    Button(
-                        onClick = { onPreset(hz) },
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
-                    ) { Text("${hz}Hz") }
-                } else {
-                    OutlinedButton(
-                        onClick = { onPreset(hz) },
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
-                    ) { Text("${hz}Hz") }
-                }
-            }
-        }
+        RateSection(
+            title = "최소 주사율 (min_refresh_rate)",
+            isSelected = { hz -> rateMatches(currentMin, hz) },
+            busy = busy,
+            onPick = onMin
+        )
+        RateSection(
+            title = "최대 주사율 (peak_refresh_rate)",
+            isSelected = { hz -> rateMatches(currentPeak, hz) },
+            busy = busy,
+            onPick = onPeak
+        )
+        RateSection(
+            title = "고정 주사율 (min = peak)",
+            isSelected = { hz -> rateMatches(currentMin, hz) && rateMatches(currentPeak, hz) },
+            busy = busy,
+            onPick = onFixed
+        )
         Text(
-            text = "60Hz는 고정, 80/96/120Hz는 적응형(refresh_rate_mode=2)으로 적용되고 min은 60.0으로 맞춥니다.",
+            text = "0Hz는 해당 설정을 지워 One UI 기본값으로 되돌립니다. 최소/최대만 바꿔도 적응형" +
+                "(refresh_rate_mode=2)으로 전환되며, 고정 주사율은 60이면 mode 0, 60 초과면 mode 1," +
+                " 그 미만은 min·peak를 같게 맞춘 적응형으로 적용됩니다.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -517,6 +535,63 @@ private fun RefreshCard(
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
             ) { Text("120 고정") }
+        }
+    }
+}
+
+/** The eight selectable rates, in the order the brief asks for. 0 = 설정 해제(기본값). */
+private val RATE_STEPS = listOf(0, 10, 24, 30, 48, 60, 80, 120)
+
+/** `60.0` / `60` / null(=설정 없음) -> 60; unreadable values are treated as 없음. */
+private fun rateOf(raw: String?): Int? = raw?.trim()?.toDoubleOrNull()?.roundToInt()
+
+/** A rate is shown as selected when the stored value matches it; 0 also matches "unset". */
+private fun rateMatches(current: Int?, hz: Int): Boolean =
+    if (hz <= 0) current == null || current <= 0 else current == hz
+
+@Composable
+private fun RateSection(
+    title: String,
+    isSelected: (Int) -> Boolean,
+    busy: Boolean,
+    onPick: (Int) -> Unit
+) {
+    Text(title, style = MaterialTheme.typography.labelMedium)
+    RATE_STEPS.chunked(4).forEach { line ->
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            line.forEach { hz ->
+                RateButton(
+                    hz = hz,
+                    selected = isSelected(hz),
+                    enabled = !busy,
+                    onClick = { onPick(hz) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RateButton(
+    hz: Int,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val label = "$hz"
+    val padding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+    if (selected) {
+        Button(onClick = onClick, enabled = enabled, modifier = modifier, contentPadding = padding) {
+            Text(label, fontSize = 13.sp)
+        }
+    } else {
+        OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier, contentPadding = padding) {
+            Text(label, fontSize = 13.sp)
         }
     }
 }
