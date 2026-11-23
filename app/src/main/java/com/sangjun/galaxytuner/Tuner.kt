@@ -154,7 +154,7 @@ data class ExtrasInfo(
             "0", null -> "사용 안 함"
             "1" -> "최대 보호 ${protectThreshold?.toIntOrNull() ?: 80}%"
             "2" -> "최대 보호 (시스템 관리)"
-            "3" -> "표준 (100% 충전 후 일시정지)"
+            "3" -> "기본 (100% 충전 후 일시정지)"
             else -> "알 수 없는 값"
         }
 }
@@ -296,20 +296,23 @@ object Tuner {
      */
     private suspend fun applyOps(ops: List<Op>): Boolean {
         if (ops.isEmpty()) return true
+        var pending = ops
         if (Access.secureWrite) {
-            var ok = true
+            val refused = mutableListOf<Op>()
             ops.forEach { op ->
                 val result = when (op) {
                     is Op.Put -> writeDirect(op.ns, op.key, op.value)
                     is Op.Delete -> writeDirect(op.ns, op.key, null)
                 }
-                ok = ok && result
+                if (!result) refused += op
             }
-            return ok
+            if (refused.isEmpty()) return true
+            // Some keys are refused to apps even with the permission; try them through the shell.
+            pending = refused
         }
         if (!ShizukuShell.state.ready) return false
         val command = buildString {
-            ops.forEach { op ->
+            pending.forEach { op ->
                 when (op) {
                     is Op.Put -> append("settings put ${op.ns} ${op.key} ${op.value}; ")
                     is Op.Delete -> append("settings delete ${op.ns} ${op.key}; ")
@@ -860,7 +863,7 @@ object Tuner {
         }
         return when (mode) {
             0 -> "배터리 보호 꺼짐"
-            3 -> "배터리 보호 표준 모드 적용"
+            3 -> "배터리 보호 기본 모드 적용"
             else -> "배터리 보호 최대 ${threshold ?: 80}% 적용"
         }
     }

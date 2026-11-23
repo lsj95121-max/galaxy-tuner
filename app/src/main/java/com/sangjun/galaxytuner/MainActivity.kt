@@ -61,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -180,9 +181,6 @@ private val DP_PRESETS = listOf(360, 384, 411, 440, 480, 520)
 private val ANIM_PRESETS = listOf(0.25, 0.5, 0.75, 1.0)
 private val ANIM_TARGETS = listOf("all" to "전체", "window" to "창", "transition" to "전환", "animator" to "애니메이터")
 
-@Composable
-private fun okBg(): Color = if (MaterialTheme.colorScheme.background.luminance() > 0.5f) OkBgLight else OkBgDark
-
 private fun Color.luminance(): Float = 0.299f * red + 0.587f * green + 0.114f * blue
 
 @Composable
@@ -192,7 +190,7 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
     val secureWrite = Access.secureWrite
     val snackbar = remember { SnackbarHostState() }
 
-    var tab by remember { mutableStateOf(Tab.REFRESH) }
+    var tab by rememberSaveable { mutableStateOf(Tab.REFRESH) }
     var showTheme by remember { mutableStateOf(false) }
     var battery by remember { mutableStateOf<Loaded<BatteryInfo>?>(null) }
     var refresh by remember { mutableStateOf<Loaded<RefreshInfo>?>(null) }
@@ -1191,7 +1189,7 @@ private fun BatteryTab(
                         Choice(1 to 85, "최대", "85%"),
                         Choice(1 to 90, "최대", "90%"),
                         Choice(1 to 95, "최대", "95%"),
-                        Choice(3 to null, "표준", "100%")
+                        Choice(3 to null, "기본", "100%")
                     ),
                     isSelected = { option ->
                         val (mode, threshold) = option
@@ -1207,7 +1205,7 @@ private fun BatteryTab(
                     columns = 3,
                     onSelect = { option -> onProtect(option.first, option.second) }
                 )
-                Hint("'표준'은 One UI 8 이상에서 동작해요(100%까지 충전한 뒤 95% 아래로 내려가면 다시 충전). 기기와 One UI 버전에 따라 선택지가 달라요.")
+                Hint("'기본'(One UI 8의 '표준')은 100%까지 충전한 뒤 95% 아래로 내려가면 다시 충전해요. One UI 8 이상에서 확인된 동작이라 그 이전 버전에서는 다르게 보일 수 있어요.")
             }
         }
 
