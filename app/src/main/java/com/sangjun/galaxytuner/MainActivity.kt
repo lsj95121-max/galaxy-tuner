@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -23,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -33,8 +33,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +51,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -65,18 +64,27 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.launch
-import kotlin.math.min
 import kotlin.math.roundToInt
+
+// ---------------------------------------------------------------------------------------------
+// Color scheme
+// onSurfaceVariant was too washed out to read comfortably, so both palettes carry a stronger
+// variant color and a slightly darker (light) / lighter (dark) outline.
+// ---------------------------------------------------------------------------------------------
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF8AB4FF),
@@ -86,40 +94,58 @@ private val DarkColors = darkColorScheme(
     secondary = Color(0xFF9FD3FF),
     onSecondary = Color(0xFF00344E),
     background = Color(0xFF101013),
-    onBackground = Color(0xFFE7E8EC),
+    onBackground = Color(0xFFEDEEF2),
     surface = Color(0xFF1A1B1F),
-    onSurface = Color(0xFFE7E8EC),
-    surfaceVariant = Color(0xFF27282E),
-    onSurfaceVariant = Color(0xFFB4B6BE),
-    outline = Color(0xFF3A3B42),
+    onSurface = Color(0xFFEDEEF2),
+    surfaceVariant = Color(0xFF2C2D34),
+    onSurfaceVariant = Color(0xFFC7C9D2),
+    outline = Color(0xFF4A4C55),
     error = Color(0xFFFFB4AB)
 )
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF0B6BF2),
+    primary = Color(0xFF0B5FD0),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFD8E4FF),
-    onPrimaryContainer = Color(0xFF00160F),
+    onPrimaryContainer = Color(0xFF001A3D),
     secondary = Color(0xFF1E6FC4),
     onSecondary = Color(0xFFFFFFFF),
     background = Color(0xFFF4F5F7),
-    onBackground = Color(0xFF1B1C1F),
+    onBackground = Color(0xFF16171A),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF1B1C1F),
-    surfaceVariant = Color(0xFFEBECF1),
-    onSurfaceVariant = Color(0xFF5A5D66),
-    outline = Color(0xFFD3D5DC),
+    onSurface = Color(0xFF16171A),
+    surfaceVariant = Color(0xFFE6E8EE),
+    onSurfaceVariant = Color(0xFF45484F),
+    outline = Color(0xFFC0C3CC),
     error = Color(0xFFB3261E)
 )
 
+/** Nothing below 12sp anywhere in the app. */
+private val AppTypography = Typography(
+    headlineSmall = TextStyle(fontSize = 21.sp, lineHeight = 27.sp, fontWeight = FontWeight.SemiBold),
+    titleLarge = TextStyle(fontSize = 19.sp, lineHeight = 25.sp, fontWeight = FontWeight.SemiBold),
+    titleMedium = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 23.sp),
+    bodyMedium = TextStyle(fontSize = 15.sp, lineHeight = 21.sp),
+    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 19.sp),
+    labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium),
+    labelMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+    labelSmall = TextStyle(fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium)
+)
+
 private val OkBgDark = Color(0xFF1C3A2A)
-private val OkFgDark = Color(0xFF7BE39A)
+private val OkFgDark = Color(0xFF8DEBAA)
 private val WarnBgDark = Color(0xFF3A2F1B)
-private val WarnFgDark = Color(0xFFFFCF80)
+private val WarnFgDark = Color(0xFFFFD48F)
+private val InfoBgDark = Color(0xFF25344A)
+private val InfoFgDark = Color(0xFFC3D7F8)
 private val OkBgLight = Color(0xFFDDF3E4)
-private val OkFgLight = Color(0xFF14683B)
+private val OkFgLight = Color(0xFF0F5A31)
 private val WarnBgLight = Color(0xFFFDEFD2)
-private val WarnFgLight = Color(0xFF8A5B00)
+private val WarnFgLight = Color(0xFF744900)
+private val InfoBgLight = Color(0xFFE2EBFA)
+private val InfoFgLight = Color(0xFF1A4487)
 
 class MainActivity : ComponentActivity() {
 
@@ -144,7 +170,7 @@ class MainActivity : ComponentActivity() {
                 controller.isAppearanceLightStatusBars = !dark
                 controller.isAppearanceLightNavigationBars = !dark
             }
-            MaterialTheme(colorScheme = colors) {
+            MaterialTheme(colorScheme = colors, typography = AppTypography) {
                 TunerApp(
                     theme = theme,
                     onThemeChange = { Tuner.setTheme(it); theme = it }
@@ -265,9 +291,15 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                                 modifier = Modifier.size(22.dp)
                             )
                         },
-                        label = { Text(entry.label, fontSize = 11.sp) },
+                        label = {
+                            Text(
+                                entry.label,
+                                fontSize = 12.sp,
+                                fontWeight = if (tab == entry) FontWeight.SemiBold else FontWeight.Medium
+                            )
+                        },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
                             selectedTextColor = MaterialTheme.colorScheme.primary,
                             indicatorColor = MaterialTheme.colorScheme.primaryContainer,
                             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -293,14 +325,17 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                         .padding(horizontal = 16.dp)
                         .padding(bottom = 6.dp)
                 ) {
-                    StatusPill(
-                        text = if (secureWrite) {
-                            "설정 권한으로 일부 기능 사용 중"
-                        } else {
-                            "Shizuku에 연결되지 않았어요 · 기타 탭에서 확인"
-                        },
-                        tone = if (secureWrite) Tone.OK else Tone.WARN
-                    )
+                    if (secureWrite) {
+                        StatusPill(
+                            text = "설정 권한 있음 · 해상도·배터리는 Shizuku 필요",
+                            tone = Tone.INFO
+                        )
+                    } else {
+                        StatusPill(
+                            text = "Shizuku 미연결 · 일부 기능만 사용 가능",
+                            tone = Tone.WARN
+                        )
+                    }
                 }
             }
 
@@ -394,13 +429,15 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
             onDismissRequest = { showTheme = false },
             title = { Text("앱 테마") },
             text = {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    NeedBadge(Need.NONE)
                     AppTheme.entries.forEach { option ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable { onThemeChange(option); showTheme = false }
-                                .padding(vertical = 6.dp),
+                                .padding(vertical = 8.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -408,7 +445,11 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                                 onClick = { onThemeChange(option); showTheme = false }
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text(option.label, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                option.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (theme == option) FontWeight.SemiBold else FontWeight.Normal
+                            )
                         }
                     }
                 }
@@ -428,7 +469,7 @@ private fun AppHeader(onThemeClick: () -> Unit) {
             .padding(start = 22.dp, end = 10.dp, top = 14.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 text = Tuner.deviceModel(),
                 style = MaterialTheme.typography.headlineSmall,
@@ -455,6 +496,73 @@ private fun AppHeader(onThemeClick: () -> Unit) {
 // Shared building blocks
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * What a feature needs before it can run, shown as a badge on its card and row.
+ *
+ * ALWAYS  - the shell (dumpsys / wm / sysfs) is used, so Shizuku has to be connected every time.
+ * MAYBE   - the app tries the call itself first and falls back to the shell; some devices need it.
+ * ONCE    - a plain Settings write. WRITE_SECURE_SETTINGS (granted once through Shizuku) is
+ *           enough afterwards, so Shizuku can be closed.
+ * NONE    - a public API or a local preference; no permission of any kind.
+ */
+private enum class Need { ALWAYS, MAYBE, ONCE, NONE }
+
+private fun needLabel(need: Need): String = when (need) {
+    Need.ALWAYS -> "Shizuku 연결 필요"
+    Need.MAYBE -> "기기에 따라 Shizuku"
+    Need.ONCE -> "Shizuku 1회 설정"
+    Need.NONE -> "권한 없이 동작"
+}
+
+@Composable
+private fun NeedBadge(need: Need) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val bg = when (need) {
+        Need.ALWAYS -> if (dark) WarnBgDark else WarnBgLight
+        Need.MAYBE -> if (dark) WarnBgDark else WarnBgLight
+        Need.ONCE -> if (dark) InfoBgDark else InfoBgLight
+        Need.NONE -> if (dark) OkBgDark else OkBgLight
+    }
+    val fg = when (need) {
+        Need.ALWAYS -> if (dark) WarnFgDark else WarnFgLight
+        Need.MAYBE -> if (dark) WarnFgDark else WarnFgLight
+        Need.ONCE -> if (dark) InfoFgDark else InfoFgLight
+        Need.NONE -> if (dark) OkFgDark else OkFgLight
+    }
+    Box(
+        modifier = Modifier
+            .background(bg, RoundedCornerShape(50))
+            .padding(horizontal = 9.dp, vertical = 3.dp)
+    ) {
+        Text(
+            text = needLabel(need),
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = fg,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** One line that says why the control above is not usable right now. */
+@Composable
+private fun NeedNotice(need: Need) {
+    val text = when (need) {
+        Need.ALWAYS -> "Shizuku를 연결해야 이 기능을 쓸 수 있어요. 기타 탭에서 연결 상태를 확인하세요."
+        Need.MAYBE -> "이 기기에서는 Shizuku를 연결해야 동작할 수 있어요."
+        Need.ONCE -> "Shizuku를 한 번 연결해 설정 권한을 받으면, 그 뒤엔 Shizuku를 꺼도 동작해요."
+        Need.NONE -> return
+    }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
 @Composable
 private fun TabContent(content: @Composable ColumnScope.() -> Unit) {
     Column(
@@ -472,6 +580,7 @@ private fun TabContent(content: @Composable ColumnScope.() -> Unit) {
 private fun SectionCard(
     title: String,
     subtitle: String? = null,
+    need: Need? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
@@ -483,12 +592,14 @@ private fun SectionCard(
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
+                if (need != null) NeedBadge(need)
                 if (subtitle != null) {
                     Text(
                         text = subtitle,
@@ -508,23 +619,31 @@ private fun StatusPill(text: String, tone: Tone) {
     val bg = when (tone) {
         Tone.OK -> if (dark) OkBgDark else OkBgLight
         Tone.WARN -> if (dark) WarnBgDark else WarnBgLight
+        Tone.INFO -> if (dark) InfoBgDark else InfoBgLight
         Tone.NEUTRAL -> MaterialTheme.colorScheme.surfaceVariant
     }
     val fg = when (tone) {
         Tone.OK -> if (dark) OkFgDark else OkFgLight
         Tone.WARN -> if (dark) WarnFgDark else WarnFgLight
+        Tone.INFO -> if (dark) InfoFgDark else InfoFgLight
         Tone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Box(
         modifier = Modifier
             .background(bg, RoundedCornerShape(50))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .padding(horizontal = 11.dp, vertical = 5.dp)
     ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, color = fg)
+        Text(
+            text = text,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.Medium,
+            color = fg
+        )
     }
 }
 
-private enum class Tone { OK, WARN, NEUTRAL }
+private enum class Tone { OK, WARN, INFO, NEUTRAL }
 
 @Composable
 private fun InfoRow(label: String, value: String) {
@@ -538,7 +657,12 @@ private fun InfoRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
-        Text(text = value, style = MaterialTheme.typography.bodySmall)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 
@@ -546,7 +670,7 @@ private fun InfoRow(label: String, value: String) {
 private fun RowScope.Metric(label: String, value: String, accent: Color? = null) {
     Column(
         modifier = Modifier.weight(1f),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Text(
             text = label,
@@ -586,14 +710,21 @@ private fun SwitchRow(
     subtitle: String?,
     checked: Boolean,
     enabled: Boolean,
+    need: Need? = null,
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (need != null) NeedBadge(need)
             if (subtitle != null) {
                 Text(
                     text = subtitle,
@@ -602,6 +733,7 @@ private fun SwitchRow(
                 )
             }
         }
+        Spacer(Modifier.width(10.dp))
         Switch(
             checked = checked,
             enabled = enabled,
@@ -613,14 +745,85 @@ private fun SwitchRow(
 
 private data class Choice<T>(val value: T, val label: String, val sub: String? = null)
 
+/**
+ * The one selectable box used everywhere: same 12dp corners, same 44/60dp height, same border and
+ * the same selected fill, so 주사율·디스플레이·배터리·기타 all look like one app. Labels never
+ * wrap onto a second line; a long label is shortened with an ellipsis instead of breaking.
+ */
 @Composable
-private fun <T> ChoiceChips(
+private fun RowScope.ChoiceBox(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    height: Dp,
+    sub: String? = null,
+    onClick: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(12.dp)
+    val container = when {
+        selected -> colors.primary
+        enabled -> colors.surfaceVariant
+        else -> colors.surface
+    }
+    val borderColor = when {
+        selected -> colors.primary
+        enabled -> colors.outline
+        else -> colors.outline.copy(alpha = 0.55f)
+    }
+    val labelColor = when {
+        selected -> colors.onPrimary
+        enabled -> colors.onSurface
+        else -> colors.onSurfaceVariant
+    }
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .height(height)
+            .clip(shape)
+            .background(container, shape)
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 5.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            lineHeight = 17.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = labelColor,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+        if (sub != null) {
+            Text(
+                text = sub,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = if (selected) colors.onPrimary.copy(alpha = 0.9f) else colors.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun <T> ChoiceGrid(
     options: List<Choice<T>>,
+    columns: Int,
     isSelected: (T) -> Boolean,
     enabled: Boolean,
-    columns: Int = 4,
     onSelect: (T) -> Unit
 ) {
+    // One height per grid so a row never mixes a one-line and a two-line box.
+    val height = if (options.any { it.sub != null }) 60.dp else 44.dp
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         options.chunked(columns).forEach { line ->
             Row(
@@ -628,30 +831,13 @@ private fun <T> ChoiceChips(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 line.forEach { choice ->
-                    FilterChip(
+                    ChoiceBox(
+                        label = choice.label,
+                        sub = choice.sub,
+                        height = height,
                         selected = isSelected(choice.value),
-                        onClick = { onSelect(choice.value) },
                         enabled = enabled,
-                        label = {
-                            if (choice.sub == null) {
-                                Text(choice.label, fontSize = 12.sp, textAlign = TextAlign.Center)
-                            } else {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(choice.label, fontSize = 12.sp, textAlign = TextAlign.Center)
-                                    Text(
-                                        text = choice.sub,
-                                        fontSize = 9.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        textAlign = TextAlign.Center
-                                    )
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                        )
+                        onClick = { onSelect(choice.value) }
                     )
                 }
                 repeat(columns - line.size) { Spacer(Modifier.weight(1f)) }
@@ -661,11 +847,12 @@ private fun <T> ChoiceChips(
 }
 
 @Composable
-private fun LoadingHint(loaded: Loaded<*>?) {
+private fun LoadingHint(loaded: Loaded<*>?, need: Need? = null) {
     val error = loaded?.error
     when {
         error != null -> ErrorText(error)
-        loaded == null -> Hint("Shizuku를 연결하면 값을 읽어요.")
+        loaded == null && need == Need.ALWAYS -> Hint("Shizuku를 연결하면 값을 읽고 바꿀 수 있어요.")
+        loaded == null -> Hint("아직 읽지 않았어요.")
         else -> Hint("아직 읽지 않았어요.")
     }
 }
@@ -691,7 +878,7 @@ private fun RefreshTab(
     val currentPeak = info?.peakHz
 
     TabContent {
-        SectionCard(title = "지금 상태", subtitle = info?.modeLabel) {
+        SectionCard(title = "지금 상태", subtitle = info?.modeLabel, need = Need.NONE) {
             if (info == null) {
                 LoadingHint(refresh)
             } else {
@@ -714,6 +901,7 @@ private fun RefreshTab(
                     },
                     checked = overlay == true,
                     enabled = !busy,
+                    need = Need.MAYBE,
                     onCheckedChange = onOverlay
                 )
             }
@@ -721,30 +909,20 @@ private fun RefreshTab(
 
         SectionCard(
             title = "주사율 설정",
-            subtitle = "화면이 움직이는 부드러움을 조절해요"
+            subtitle = "화면이 움직이는 부드러움을 조절해요",
+            need = Need.ONCE
         ) {
             if (info == null) {
                 LoadingHint(refresh)
             } else {
                 var target by remember { mutableStateOf(RateTarget.PEAK) }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    RateTarget.entries.forEach { option ->
-                        FilterChip(
-                            selected = target == option,
-                            onClick = { target = option },
-                            enabled = !busy,
-                            label = { Text(option.label, fontSize = 12.sp) },
-                            modifier = Modifier.weight(1f),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                            )
-                        )
-                    }
-                }
+                ChoiceGrid(
+                    options = RateTarget.entries.map { Choice(it, it.label) },
+                    columns = 3,
+                    isSelected = { it == target },
+                    enabled = !busy,
+                    onSelect = { target = it }
+                )
 
                 val isSelected: (Int) -> Boolean = { hz ->
                     when (target) {
@@ -754,29 +932,32 @@ private fun RefreshTab(
                     }
                 }
 
-                ChoiceChips(
-                    options = RATE_STEPS.map { hz ->
-                        Choice(hz, if (hz <= 0) "해제" else "$hz")
-                    },
+                ChoiceGrid(
+                    options = RATE_STEPS.map { hz -> Choice(hz, if (hz <= 0) "해제" else "${hz}Hz") },
+                    columns = 4,
                     isSelected = isSelected,
                     enabled = !busy && canWrite,
-                    columns = 4,
                     onSelect = { hz -> onPickRate(target, hz) }
                 )
 
-                Hint(
-                    when (target) {
-                        RateTarget.MIN -> "화면이 내려갈 수 있는 가장 낮은 주사율이에요."
-                        RateTarget.PEAK -> "화면이 올라갈 수 있는 가장 높은 주사율이에요."
-                        RateTarget.FIXED -> "선택한 주사율로 고정해요. 배터리 사용이 늘어나요."
-                    }
-                )
+                if (!canWrite) {
+                    NeedNotice(Need.ONCE)
+                } else {
+                    Hint(
+                        when (target) {
+                            RateTarget.MIN -> "화면이 내려갈 수 있는 가장 낮은 주사율이에요."
+                            RateTarget.PEAK -> "화면이 올라갈 수 있는 가장 높은 주사율이에요."
+                            RateTarget.FIXED -> "선택한 주사율로 고정해요. 배터리 사용이 늘어나요."
+                        }
+                    )
+                }
             }
         }
 
         PowerSaveCard(
             loaded = power,
             busy = busy || !canWrite,
+            canWrite = canWrite,
             onEnable = onPowerSave,
             onDisable = onDisablePowerSave
         )
@@ -787,6 +968,7 @@ private fun RefreshTab(
 private fun PowerSaveCard(
     loaded: Loaded<PowerSaveInfo>?,
     busy: Boolean,
+    canWrite: Boolean,
     onEnable: (Boolean) -> Unit,
     onDisable: () -> Unit
 ) {
@@ -794,8 +976,9 @@ private fun PowerSaveCard(
     val applied = info?.overrideApplied == true
 
     SectionCard(
-        title = "절전 모드에서도 120Hz",
-        subtitle = "배터리 절약은 그대로, 화면만 부드럽게"
+        title = "절전 모드 120Hz",
+        subtitle = "배터리 절약은 그대로, 화면만 부드럽게",
+        need = Need.ONCE
     ) {
         if (info == null) {
             LoadingHint(loaded)
@@ -835,13 +1018,22 @@ private fun PowerSaveCard(
                     OutlinedButton(
                         onClick = { onEnable(true) },
                         enabled = !busy,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) { Text("고정 120Hz로 유지", fontSize = 12.sp) }
-                    TextButton(onClick = onDisable, enabled = !busy) { Text("해제", fontSize = 12.sp) }
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                    ) { Text("고정 120Hz로 유지", fontSize = 13.sp) }
+                    TextButton(
+                        onClick = onDisable,
+                        enabled = !busy,
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("해제", fontSize = 13.sp) }
                 }
             }
 
-            Hint("설정 > 배터리에서 절전 모드를 켠 상태에서 사용하세요. 해제하면 적용 전 설정으로 돌아가요.")
+            if (!canWrite) {
+                NeedNotice(Need.ONCE)
+            } else {
+                Hint("설정 > 배터리에서 절전 모드를 켠 상태에서 사용하세요. 해제하면 적용 전 설정으로 돌아가요.")
+            }
         }
     }
 }
@@ -883,10 +1075,12 @@ private fun DisplayTab(
     TabContent {
         SectionCard(
             title = "화면 해상도",
-            subtitle = "선명함과 배터리 사용량을 함께 조절해요"
+            subtitle = "선명함과 배터리 사용량을 함께 조절해요",
+            need = Need.ALWAYS
         ) {
             if (info == null) {
-                LoadingHint(display)
+                LoadingHint(display, Need.ALWAYS)
+                NeedNotice(Need.ALWAYS)
             } else {
                 InfoRow(
                     "현재",
@@ -915,25 +1109,30 @@ private fun DisplayTab(
                         sub = if (w != null && h != null) "${w}×${h}" else null
                     )
                 }
-                ChoiceChips(
+                ChoiceGrid(
                     options = options,
+                    columns = 3,
                     isSelected = { pct -> kotlin.math.abs(pct - percent) <= 3 },
                     enabled = !busy && ready,
-                    columns = 3,
                     onSelect = onResolution
                 )
-                Hint(
-                    if (info.isSizeOverridden) {
-                        "지금은 ${info.widthPx}×${info.heightPx} 로 줄어 있어요. 최소 너비(dp)는 그대로 유지돼요."
-                    } else {
-                        "기기 원본 해상도예요. 낮추면 배터리를 아끼고, 화면은 조금 덜 선명해져요."
-                    }
-                )
+                if (!ready) {
+                    NeedNotice(Need.ALWAYS)
+                } else {
+                    Hint(
+                        if (info.isSizeOverridden) {
+                            "지금은 ${info.widthPx}×${info.heightPx} 로 줄어 있어요. 최소 너비(dp)는 그대로 유지돼요."
+                        } else {
+                            "기기 원본 해상도예요. 낮추면 배터리를 아끼고, 화면은 조금 덜 선명해져요."
+                        }
+                    )
+                }
             }
         }
 
         DensityCard(
             loaded = display,
+            ready = ready,
             busy = busy || !ready,
             onApply = onDp,
             onReset = onResetDp
@@ -947,7 +1146,8 @@ private fun DisplayTab(
 
         SectionCard(
             title = "추가 어둡게",
-            subtitle = "화면을 한 단계 더 어둡게, 밤에 눈이 편해요"
+            subtitle = "화면을 한 단계 더 어둡게, 밤에 눈이 편해요",
+            need = Need.ONCE
         ) {
             if (sheet == null) {
                 LoadingHint(extras)
@@ -967,6 +1167,7 @@ private fun DisplayTab(
 @Composable
 private fun DensityCard(
     loaded: Loaded<DisplayInfo>?,
+    ready: Boolean,
     busy: Boolean,
     onApply: (Int) -> Unit,
     onReset: () -> Unit
@@ -976,41 +1177,25 @@ private fun DensityCard(
 
     SectionCard(
         title = "최소 너비 (dp)",
-        subtitle = "화면에 담기는 내용의 양을 조절해요"
+        subtitle = "화면에 담기는 내용의 양을 조절해요",
+        need = Need.ALWAYS
     ) {
         if (info == null) {
-            LoadingHint(loaded)
+            LoadingHint(loaded, Need.ALWAYS)
+            NeedNotice(Need.ALWAYS)
         } else {
             val isDefault = !info.isDensityOverridden
             InfoRow("현재", info.smallestWidthDp?.let { "${it}dp" } ?: "-")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = isDefault,
-                    onClick = onReset,
-                    enabled = !busy,
-                    label = { Text("기본", fontSize = 12.sp) },
-                    modifier = Modifier.weight(1f),
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                )
-                DP_PRESETS.take(3).forEach { dp ->
-                    DensityChip(dp, info.smallestWidthDp == dp && !isDefault, busy) { onApply(dp) }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DP_PRESETS.drop(3).forEach { dp ->
-                    DensityChip(dp, info.smallestWidthDp == dp && !isDefault, busy) { onApply(dp) }
-                }
-                Spacer(Modifier.weight(1f))
-            }
+
+            ChoiceGrid(
+                options = listOf(Choice(-1, "기본")) + DP_PRESETS.map { Choice(it, "$it") },
+                columns = 4,
+                isSelected = { dp ->
+                    if (dp == -1) isDefault else !isDefault && info.smallestWidthDp == dp
+                },
+                enabled = !busy,
+                onSelect = { dp -> if (dp == -1) onReset() else onApply(dp) }
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1022,39 +1207,27 @@ private fun DensityCard(
                     onValueChange = { text -> custom = text.filter { it.isDigit() }.take(4) },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    label = { Text("직접 입력 (dp)") },
+                    shape = RoundedCornerShape(12.dp),
+                    label = { Text("직접 입력 (dp)", fontSize = 13.sp) },
+                    textStyle = MaterialTheme.typography.bodyMedium,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                 )
                 Button(
                     onClick = { custom.toIntOrNull()?.let(onApply) },
                     enabled = !busy && custom.toIntOrNull()?.let { it in 200..1000 } == true,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                ) { Text("적용") }
+                ) { Text("적용", fontSize = 14.sp) }
             }
 
-            Hint("개발자 옵션의 '최소 너비'와 같아요. 재부팅하면 원래 값으로 돌아가요.")
+            if (!ready) {
+                NeedNotice(Need.ALWAYS)
+            } else {
+                Hint("개발자 옵션의 '최소 너비'와 같아요. 재부팅하면 원래 값으로 돌아가요.")
+            }
         }
     }
-}
-
-@Composable
-private fun RowScope.DensityChip(
-    dp: Int,
-    selected: Boolean,
-    busy: Boolean,
-    onClick: () -> Unit
-) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        enabled = !busy,
-        label = { Text("$dp", fontSize = 12.sp) },
-        modifier = Modifier.weight(1f),
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primary,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-        )
-    )
 }
 
 @Composable
@@ -1068,7 +1241,8 @@ private fun AnimationCard(
 
     SectionCard(
         title = "애니메이션 배율",
-        subtitle = "화면 전환 속도를 조절해요"
+        subtitle = "화면 전환 속도를 조절해요",
+        need = Need.ONCE
     ) {
         if (sheet == null) {
             LoadingHint(loaded)
@@ -1082,24 +1256,13 @@ private fun AnimationCard(
                 ).joinToString(" · ").ifEmpty { "-" }
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                ANIM_TARGETS.forEach { (key, label) ->
-                    FilterChip(
-                        selected = target == key,
-                        onClick = { target = key },
-                        enabled = !busy,
-                        label = { Text(label, fontSize = 11.sp) },
-                        modifier = Modifier.weight(1f),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    )
-                }
-            }
+            ChoiceGrid(
+                options = ANIM_TARGETS.map { (key, label) -> Choice(key, label) },
+                columns = 2,
+                isSelected = { it == target },
+                enabled = !busy,
+                onSelect = { target = it }
+            )
 
             val current = when (target) {
                 "window" -> sheet.windowScale
@@ -1107,9 +1270,13 @@ private fun AnimationCard(
                 "animator" -> sheet.animatorScale
                 else -> sheet.windowScale
             }
-            ChoiceChips(
+            ChoiceGrid(
                 options = ANIM_PRESETS.map { scale ->
-                    Choice(scale, if (scale == 1.0) "1.0x 기본" else "${Tuner.trimScale(scale.toString())}x")
+                    Choice(
+                        scale,
+                        "${Tuner.trimScale(scale.toString())}x",
+                        if (scale == 1.0) "기본" else null
+                    )
                 },
                 isSelected = { scale -> tunerScaleEquals(current, scale) },
                 enabled = !busy,
@@ -1146,9 +1313,14 @@ private fun BatteryTab(
     val sheet = extras?.value
 
     TabContent {
-        SectionCard(title = "배터리 건강도", subtitle = "사이클과 효율") {
+        SectionCard(
+            title = "배터리 건강도",
+            subtitle = "사이클과 효율",
+            need = Need.ALWAYS
+        ) {
             if (info == null) {
-                LoadingHint(battery)
+                LoadingHint(battery, Need.ALWAYS)
+                NeedNotice(Need.ALWAYS)
                 if (ready) TextButton(onClick = onReloadBattery) { Text("다시 읽기") }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1176,15 +1348,16 @@ private fun BatteryTab(
 
         SectionCard(
             title = "배터리 보호",
-            subtitle = "충전을 멈춰 배터리 수명을 지켜요"
+            subtitle = "충전을 멈춰 배터리 수명을 지켜요",
+            need = Need.ONCE
         ) {
             if (sheet == null) {
                 LoadingHint(extras)
             } else {
                 InfoRow("현재", sheet.protectionLabel)
-                ChoiceChips(
+                ChoiceGrid(
                     options = listOf(
-                        Choice(0 to null, "사용 안 함"),
+                        Choice(0 to null, "사용 안 함", "제한 없음"),
                         Choice(1 to 80, "최대", "80%"),
                         Choice(1 to 85, "최대", "85%"),
                         Choice(1 to 90, "최대", "90%"),
@@ -1218,6 +1391,7 @@ private fun BatteryTab(
                     subtitle = "자주 쓰는 앱을 학습해 전력을 배분해요",
                     checked = sheet.adaptiveBattery != "0",
                     enabled = !busy,
+                    need = Need.ONCE,
                     onCheckedChange = onAdaptive
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
@@ -1230,6 +1404,7 @@ private fun BatteryTab(
                     },
                     checked = sheet.dozeEnabled != false,
                     enabled = !busy && ready,
+                    need = Need.ALWAYS,
                     onCheckedChange = onDoze
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
@@ -1238,9 +1413,14 @@ private fun BatteryTab(
                     subtitle = "계정 메일·연락처를 자동으로 받아와요",
                     checked = sheet.autoSync == true,
                     enabled = !busy && sheet.autoSync != null,
+                    need = Need.NONE,
                     onCheckedChange = onAutoSync
                 )
-                Hint("잠자기 모드를 끄면 알림이 늦게 오는 대신 대기 전력이 늘어나요. 재부팅하면 원래대로 돌아가요.")
+                if (!ready) {
+                    NeedNotice(Need.ALWAYS)
+                } else {
+                    Hint("잠자기 모드를 끄면 알림이 늦게 오는 대신 대기 전력이 늘어나요. 재부팅하면 원래대로 돌아가요.")
+                }
             }
         }
     }
@@ -1263,7 +1443,7 @@ private fun MoreTab(
     val sheet = extras?.value
 
     TabContent {
-        SectionCard(title = "카메라", subtitle = "셔터 소리를 끌 수 있어요") {
+        SectionCard(title = "카메라", subtitle = "셔터 소리를 끌 수 있어요", need = Need.ONCE) {
             if (sheet == null) {
                 LoadingHint(extras)
             } else {
@@ -1285,7 +1465,7 @@ private fun MoreTab(
 
         SectionCard(
             title = "권한과 연결",
-            subtitle = "한 번만 준비하면 다음부터는 바로 쓸 수 있어요"
+            subtitle = "Shizuku는 설정을 바꿀 때만 쓰여요"
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1310,25 +1490,89 @@ private fun MoreTab(
             }
 
             if (!shizuku.binderAlive) {
-                Hint(
-                    "Shizuku 앱을 열고 '무선 디버깅으로 시작'을 누른 뒤 아래 '다시 확인'을 눌러 주세요."
-                )
+                Hint("Shizuku 앱을 열고 '무선 디버깅으로 시작'을 누른 뒤 아래 '다시 확인'을 눌러 주세요.")
             } else if (!shizuku.permissionGranted) {
                 Hint("Shizuku 권한을 허용하면 설정 권한을 자동으로 받아요.")
-                Button(onClick = { ShizukuShell.requestPermission() }) { Text("권한 허용") }
+                Button(onClick = { ShizukuShell.requestPermission() }, shape = RoundedCornerShape(12.dp)) {
+                    Text("권한 허용")
+                }
             } else if (!secureWrite) {
-                Hint("설정 권한을 한 번만 받으면 Shizuku를 꺼도 대부분의 기능이 동작해요.")
-                Button(onClick = onGrant, enabled = !busy) { Text("설정 권한 받기") }
+                Hint("설정 권한을 한 번만 받으면 주사율·애니메이션·배터리 보호·셔터음은 Shizuku를 꺼도 동작해요.")
+                Button(onClick = onGrant, enabled = !busy, shape = RoundedCornerShape(12.dp)) {
+                    Text("설정 권한 받기")
+                }
             } else {
-                Hint("설정 권한이 있어 Shizuku 없이도 설정을 바꿀 수 있어요. 해상도·배터리 정보·잠자기는 Shizuku가 필요해요.")
+                Hint("설정 권한이 있어요. 설정 변경은 Shizuku 없이 동작하고, 해상도·배터리 정보·잠자기만 Shizuku 연결이 필요해요.")
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onCheck, enabled = !busy) { Text("다시 확인") }
+                OutlinedButton(
+                    onClick = onCheck,
+                    enabled = !busy,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                ) { Text("다시 확인", fontSize = 14.sp) }
             }
+        }
+
+        SectionCard(
+            title = "기능별 Shizuku 필요 여부",
+            subtitle = "기능마다 필요한 연결이 달라요"
+        ) {
+            NeedGroup(
+                need = Need.ALWAYS,
+                items = listOf(
+                    "화면 해상도 변경",
+                    "최소 너비(dp) 변경",
+                    "배터리 건강도 조회 (dumpsys)",
+                    "잠자기 모드 (Doze)"
+                ),
+                note = "Shizuku가 켜져 있어야 할 때마다 동작해요."
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            NeedGroup(
+                need = Need.MAYBE,
+                items = listOf("화면 재생률 실시간 표시"),
+                note = "앱이 먼저 직접 시도하고, 막히면 Shizuku로 시도해요."
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            NeedGroup(
+                need = Need.ONCE,
+                items = listOf(
+                    "주사율 최소·최대·고정",
+                    "절전 모드에서 120Hz 유지",
+                    "애니메이션 배율",
+                    "추가 어둡게",
+                    "배터리 보호",
+                    "적응형 배터리",
+                    "카메라 셔터음 무음"
+                ),
+                note = "Shizuku로 한 번만 설정 권한을 받으면 그 뒤엔 Shizuku를 꺼도 동작해요."
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            NeedGroup(
+                need = Need.NONE,
+                items = listOf("자동 동기화", "앱 테마", "지금 상태 조회"),
+                note = "권한 없이 바로 동작해요."
+            )
         }
 
         Hint("값을 바꾸면 바로 적용돼요. 해상도·최소 너비는 재부팅하면 원래대로 돌아가요.")
         Hint("일부 항목은 기기와 One UI 버전에 따라 제공되지 않을 수 있어요.")
+    }
+}
+
+@Composable
+private fun NeedGroup(need: Need, items: List<String>, note: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        NeedBadge(need)
+        items.forEach { item ->
+            Text(
+                text = "· $item",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Hint(note)
     }
 }

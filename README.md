@@ -5,7 +5,7 @@
 **`WRITE_SECURE_SETTINGS`** 덕분에 Shizuku가 꺼져 있어도 대부분의 설정을 앱이 직접 바꿉니다.
 
 - 패키지: `com.sangjun.galaxytuner`
-- 버전: 1.0.5 (versionCode 6, debug)
+- 버전: 1.0.6 (versionCode 7, debug)
 - minSdk 29 (Android 10) / targetSdk 34
 - Kotlin + Jetpack Compose + Material 3 (One UI 스타일)
 
@@ -50,6 +50,25 @@
 ### 탭 4 · 기타
 - **카메라 셔터음**: `csc_pref_camera_forced_shuttersound_key` 토글
 - **권한과 연결**: Shizuku 실행·권한·설정 권한 상태와 연결 가이드, '설정 권한 받기', '다시 확인'
+- **기능별 Shizuku 필요 여부**: 상시 필요 / 1회 설정 / 권한 없이 동작 세 묶음으로 기능 이름을 모두 나열
+
+## UI 규칙 (1.0.6)
+
+- **선택 박스 하나로 통일**: 주사율·디스플레이·배터리 탭의 모든 선택지는 같은 컴포저블(`ChoiceBox`)을 씁니다.
+  모서리 12dp, 높이 44dp(한 줄) / 60dp(이름+값 두 줄), 1dp 테두리, 선택 시 primary 채움 + `onPrimary` 글자,
+  미선택 시 `surfaceVariant` 채움 + `outline` 테두리. 한 줄에 놓는 개수는 3·4·2열로 그리드마다 정해 두고
+  줄이 모자라면 같은 폭의 빈 칸으로 채워 정렬을 맞춥니다. 라벨은 `maxLines = 1`로 두 줄로 꺾이지 않습니다.
+- **글씨 크기 하한 12sp**: 앱 테마 타이포그래피를 다시 정의해 `labelSmall` 12sp, `bodySmall` 13sp,
+  `bodyMedium` 15sp, `titleMedium` 16sp, `headlineSmall` 21sp를 쓰고, 11sp 이하 글씨는 없습니다.
+  `onSurfaceVariant`는 라이트 `#45484F`, 다크 `#C7C9D2`로 올려 보조 설명도 또렷하게 읽힙니다.
+- **기능별 Shizuku 필요 여부 배지**: 모든 기능 카드·토글에 배지를 붙입니다.
+  - `Shizuku 연결 필요` — 해상도, 최소 너비(dp), 배터리 건강도, 잠자기 모드
+  - `기기에 따라 Shizuku` — 화면 재생률 실시간 표시
+  - `Shizuku 1회 설정` — 주사율, 절전 모드 120Hz, 애니메이션 배율, 추가 어둡게, 배터리 보호, 적응형 배터리, 셔터음
+  - `권한 없이 동작` — 자동 동기화, 앱 테마, 지금 상태 조회
+  배지는 실제 코드 경로와 맞춰 두었습니다(`Tuner`의 `ShizukuShell.state.ready` 검사 = 상시 필요,
+  `Access.secureWrite` 대체 경로 = 1회 설정). 지금 쓸 수 없는 기능은 회색으로 비활성되고
+  바로 아래에 이유 한 줄이 나옵니다. '기타' 탭에는 같은 내용을 기능 이름까지 나열한 요약 카드가 있습니다.
 
 ## 권한 동작 방식
 
@@ -71,9 +90,9 @@
 
 ## APK 설치
 
-- 빌드 결과: `GalaxyTuner-v1.0.5-debug.apk` (GitHub 릴리스 `v1.0.5` 첨부)
-- 1.0.0~1.0.4와 같은 디버그 키(`keystore/debug.keystore`)로 서명해 **덮어쓰기 업데이트 설치**가 됩니다
-- `adb install -r GalaxyTuner-v1.0.5-debug.apk` 도 가능
+- 빌드 결과: `GalaxyTuner-v1.0.6-debug.apk` (GitHub 릴리스 `v1.0.6` 첨부)
+- 1.0.0~1.0.5와 같은 디버그 키(`keystore/debug.keystore`)로 서명해 **덮어쓰기 업데이트 설치**가 됩니다
+- `adb install -r GalaxyTuner-v1.0.6-debug.apk` 도 가능
 
 ## 빌드
 
