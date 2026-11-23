@@ -187,50 +187,52 @@ fun TunerScreen() {
                 )
             }
 
-            BatteryCard(
-                loaded = battery,
-                onReload = { scope.launch { battery = Tuner.readBattery() } }
-            )
+            if (shizuku.ready || battery != null) {
+                BatteryCard(
+                    loaded = battery,
+                    onReload = { scope.launch { battery = Tuner.readBattery() } }
+                )
 
-            RefreshCard(
-                loaded = refresh,
-                busy = busy || !shizuku.ready,
-                onPick = { target, hz ->
-                    act {
-                        when (target) {
-                            RateTarget.MIN -> Tuner.setMinRefreshRate(hz)
-                            RateTarget.PEAK -> Tuner.setPeakRefreshRate(hz)
-                            RateTarget.FIXED -> Tuner.setFixedRefreshRate(hz)
+                RefreshCard(
+                    loaded = refresh,
+                    busy = busy || !shizuku.ready,
+                    onPick = { target, hz ->
+                        act {
+                            when (target) {
+                                RateTarget.MIN -> Tuner.setMinRefreshRate(hz)
+                                RateTarget.PEAK -> Tuner.setPeakRefreshRate(hz)
+                                RateTarget.FIXED -> Tuner.setFixedRefreshRate(hz)
+                            }
                         }
                     }
-                }
-            )
+                )
 
-            DensityCard(
-                loaded = display,
-                busy = busy || !shizuku.ready,
-                onApply = { dp -> act(reloadDisplay = true) { Tuner.setSmallestWidthDp(dp) } },
-                onReset = { act(reloadDisplay = true) { Tuner.resetSmallestWidth() } }
-            )
+                DensityCard(
+                    loaded = display,
+                    busy = busy || !shizuku.ready,
+                    onApply = { dp -> act(reloadDisplay = true) { Tuner.setSmallestWidthDp(dp) } },
+                    onReset = { act(reloadDisplay = true) { Tuner.resetSmallestWidth() } }
+                )
 
-            PowerSaveCard(
-                loaded = powerSave,
-                busy = busy || !shizuku.ready,
-                onEnable = { fixed -> act { Tuner.enablePowerSaveHighRefresh(fixed) } },
-                onDisable = { act { Tuner.disablePowerSaveHighRefresh() } }
-            )
+                PowerSaveCard(
+                    loaded = powerSave,
+                    busy = busy || !shizuku.ready,
+                    onEnable = { fixed -> act { Tuner.enablePowerSaveHighRefresh(fixed) } },
+                    onDisable = { act { Tuner.disablePowerSaveHighRefresh() } }
+                )
 
-            ShutterCard(
-                loaded = shutter,
-                busy = busy || !shizuku.ready,
-                onSet = { value ->
-                    act {
-                        val result = Tuner.applyShutter(value)
-                        shutter = Tuner.readShutter()
-                        result
+                ShutterCard(
+                    loaded = shutter,
+                    busy = busy || !shizuku.ready,
+                    onSet = { value ->
+                        act {
+                            val result = Tuner.applyShutter(value)
+                            shutter = Tuner.readShutter()
+                            result
+                        }
                     }
-                }
-            )
+                )
+            }
 
             Text(
                 text = "값은 Shizuku 권한으로 적용됩니다. 기기와 One UI 버전에 따라 일부 항목은 표시되지 않거나 다르게 동작할 수 있습니다.",
