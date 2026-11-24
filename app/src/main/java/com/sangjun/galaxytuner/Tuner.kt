@@ -5,9 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -121,14 +119,37 @@ data class PowerSaveInfo(
     val mode: String?,
     val min: String?,
     val peak: String?,
-    val refreshLimitEnabled: String?
+    val refreshLimitEnabled: String?,
+    val restrictedPerformance: String?
 ) {
     val peakHz: Int? get() = rateOf(peak)
 
     /** True when the "keep high refresh in power saving" override is written. */
     val overrideApplied: Boolean
         get() = refreshLimitEnabled == "0" && mode != "0" && (peakHz ?: 0) >= 120
+
+    /** `restricted_device_performance` = "1,1" is One UI's CPU 70% limit. */
+    val cpuLimited: Boolean get() = restrictedPerformance?.replace(" ", "") == CPU_LIMIT_ON
 }
+
+/** `restricted_device_performance` (global) value that pins the CPU to 70%. */
+internal const val CPU_LIMIT_ON = "1,1"
+
+/**
+ * Quick-Doze preset for `device_idle_constants` (global).
+ *
+ * The key holds a comma separated list of Doze timings. Writing a short list makes the phone fall
+ * into light/deep idle a minute after the screen goes off and keeps the maintenance window tight,
+ * the same effect `dumpsys deviceidle force-idle`-style tools get without running a shell every
+ * time. Clearing the key (or putting the value that was there before back) returns the firmware
+ * defaults.
+ */
+internal const val QUICK_DOZE_PRESET =
+    "inactive_to=60000,idle_after_inactive_to=0,idle_pending_to=60000,idle_to=600000," +
+        "light_after_inactive_to=0,light_idle_to=60000,light_idle_maintenance_min_interval=30000," +
+        "light_idle_maintenance_max_interval=60000"
+
+internal fun isQuickDoze(raw: String?): Boolean = raw?.replace(" ", "") == QUICK_DOZE_PRESET
 
 /**
  * Everything that lives in Settings but does not deserve its own shell round-trip:
@@ -141,13 +162,20 @@ data class ExtrasInfo(
     val transitionScale: String?,
     val animatorScale: String?,
     val extraDim: String?,
+    val extraDimLevel: String?,
     val protectMode: String?,
     val protectThreshold: String?,
     val adaptiveBattery: String?,
     val autoSync: Boolean?,
-    val dozeEnabled: Boolean?
+    val dozeConstants: String?
 ) {
     val animationScale: String? get() = windowScale ?: transitionScale ?: animatorScale
+
+    /** Extra dim intensity 0..100; null when the firmware keeps no level. */
+    val extraDimPercent: Int? get() = extraDimLevel?.trim()?.toIntOrNull()?.coerceIn(0, 100)
+
+    /** True while the Quick-Doze preset is the value of `device_idle_constants`. */
+    val quickDoze: Boolean get() = isQuickDoze(dozeConstants)
 
     val protectionLabel: String
         get() = when (protectMode) {
@@ -176,6 +204,9 @@ object Tuner {
     private const val PREFS = "galaxy_tuner"
     private const val KEY_THEME = "theme_mode"
     private const val KEY_PSM_BACKUP = "psm_refresh_backup"
+    private const val KEY_PERF_BACKUP = "restricted_performance_backup"
+    private const val KEY_DOZE_BACKUP = "device_idle_constants_backup"
+    private const val KEY_NATIVE_DENSITY = "native_density_dpi"
     private const val ABSENT = "__absent__"
 
     // Refresh rate (Samsung One UI).
@@ -194,6 +225,13 @@ object Tuner {
     private const val PSM_REFRESH_TAG_STATE = "psm_refresh_rate_tag_power_mode_state"
     private const val PSM_MODE_REFRESH = "sem_power_mode_refresh_rate"
     private const val PSM_MODE_REFRESH_COVER = "sem_power_mode_refresh_rate_cover"
+
+    // Samsung power saving CPU limit (global table): "1,1" = CPU 70%.
+    private const val RESTRICTED_PERF = "restricted_device_performance"
+
+    // Doze timings (global table) and the extra dim intensity (secure table).
+    private const val DOZE_CONSTANTS = "device_idle_constants"
+    private const val EXTRA_DIM_LEVEL = "reduce_bright_colors_level"
 
     // Samsung battery protection (One UI 6.1+: global table).
     private const val PROTECT_MODE = "protect_battery"                 // 0 off / 1 최대 / 2 시스템 관리 / 3 표준
@@ -511,24 +549,41 @@ object Tuner {
     private fun fmt(value: Double): String = String.format(java.util.Locale.US, "%.1f", value)
 
     // ---------------------------------------------------------------------------------------
-    // Screen refresh rate overlay (the developer-options "show refresh rate" indicator)
+    // Display: resolution (size) and smallest width (density)
+    //
+    // The change is tried through the hidden IWindowManager first (WRITE_SECURE_SETTINGS is
+    // enough for it), so Shizuku can stay closed; `wm` is the fallback for firmwares that
+    // refuse the direct call.
     // ---------------------------------------------------------------------------------------
 
-    suspend fun readRefreshOverlay(): Boolean? = withContext(Dispatchers.IO) { RefreshRateOverlay.isEnabled() }
-
-    suspend fun setRefreshOverlay(on: Boolean): String = RefreshRateOverlay.set(on)
-
-    // ---------------------------------------------------------------------------------------
-    // Display: resolution (wm size) and smallest width (wm density)
-    // ---------------------------------------------------------------------------------------
-
+    /**
+     * Reads the panel and the current override.
+     *
+     * `wm` is asked first while the shell is connected, because it prints the physical values
+     * beside the overrides. With Shizuku closed the same numbers come from DisplayManager, where
+     * the density the panel shipped with is only known from an earlier shell read.
+     */
     suspend fun readDisplay(): Loaded<DisplayInfo> {
-        if (!ShizukuShell.state.ready) return Loaded(null, needsShizuku())
-        val out = when (val r = ShizukuShell.exec("wm size; echo '#SPLIT#'; wm density")) {
-            is ShellResult.Ok -> r.output
-            is ShellResult.Err -> return Loaded(null, r.message)
+        readDisplayShell()?.let { info ->
+            saveNativeDensity(info.physicalDensityDpi)
+            return Loaded(info, null)
         }
-        if (out.startsWith("ERROR")) return Loaded(null, out.trim())
+        DisplayBridge.read(AppCtx.context, nativeDensity())?.let { return Loaded(it, null) }
+        return Loaded(
+            null,
+            if (ShizukuShell.state.ready) {
+                "화면 크기 정보를 읽지 못했어요."
+            } else {
+                "화면 정보를 읽지 못했어요. Shizuku를 연결해 주세요."
+            }
+        )
+    }
+
+    /** The `wm size` / `wm density` view; null when the shell is closed or the output is unusable. */
+    private suspend fun readDisplayShell(): DisplayInfo? {
+        if (!ShizukuShell.state.ready) return null
+        val out = (ShizukuShell.exec("wm size; echo '#SPLIT#'; wm density") as? ShellResult.Ok)?.output ?: return null
+        if (out.startsWith("ERROR")) return null
         val parts = out.split("#SPLIT#")
         val sizeText = parts.getOrNull(0).orEmpty()
         val densityText = parts.getOrNull(1).orEmpty()
@@ -546,23 +601,28 @@ object Tuner {
         val physicalDensity = densities["Physical"]?.groupValues?.get(2)?.toIntOrNull()
         val overrideDensity = densities["Override"]?.groupValues?.get(2)?.toIntOrNull()
 
-        if (physicalW == null || physicalDensity == null) {
-            return Loaded(null, "화면 크기 정보를 읽지 못했어요.")
-        }
-        return Loaded(
-            DisplayInfo(
-                widthPx = overrideW ?: physicalW,
-                heightPx = overrideH ?: physicalH,
-                densityDpi = overrideDensity ?: physicalDensity,
-                physicalWidthPx = physicalW,
-                physicalHeightPx = physicalH,
-                physicalDensityDpi = physicalDensity,
-                overrideWidthPx = overrideW,
-                overrideHeightPx = overrideH,
-                overrideDensityDpi = overrideDensity
-            ),
-            null
+        if (physicalW == null || physicalDensity == null) return null
+        return DisplayInfo(
+            widthPx = overrideW ?: physicalW,
+            heightPx = overrideH ?: physicalH,
+            densityDpi = overrideDensity ?: physicalDensity,
+            physicalWidthPx = physicalW,
+            physicalHeightPx = physicalH,
+            physicalDensityDpi = physicalDensity,
+            overrideWidthPx = overrideW,
+            overrideHeightPx = overrideH,
+            overrideDensityDpi = overrideDensity
         )
+    }
+
+    /** Panel density remembered from a shell read; null until one happened. */
+    private fun nativeDensity(): Int? = prefs?.getInt(KEY_NATIVE_DENSITY, 0)?.takeIf { it > 0 }
+
+    private fun saveNativeDensity(dpi: Int?) {
+        if (dpi == null || dpi <= 0) return
+        val store = prefs ?: return
+        if (store.getInt(KEY_NATIVE_DENSITY, 0) == dpi) return
+        store.edit().putInt(KEY_NATIVE_DENSITY, dpi).apply()
     }
 
     /**
@@ -571,7 +631,6 @@ object Tuner {
      * (smallest width in dp) stays exactly the same.
      */
     suspend fun applyResolution(percent: Int): String {
-        if (!ShizukuShell.state.ready) return needsShizuku()
         val info = readDisplay().value ?: return "화면 정보를 읽지 못해 바꾸지 못했어요."
         val pw = info.physicalWidthPx ?: return "화면 크기를 읽지 못해 바꾸지 못했어요."
         val ph = info.physicalHeightPx ?: return "화면 크기를 읽지 못해 바꾸지 못했어요."
@@ -581,12 +640,20 @@ object Tuner {
 
         if (percent >= 100) {
             val dpi = (min(pw, ph) * 160.0 / dp).roundToInt().coerceIn(72, 1000)
-            val command = if (physicalDensity != null && dpi == physicalDensity) {
-                "wm size reset; wm density reset"
-            } else {
-                "wm size reset; wm density $dpi"
-            }
-            return runChange(command, "해상도 원본 복원")
+            // Keep the current dp when it was set apart from the panel's own density.
+            val keepDensity = physicalDensity == null || dpi != physicalDensity
+            return changeDisplay(
+                label = "해상도 원본 복원",
+                direct = {
+                    DisplayBridge.clearSize()
+                        ?: if (keepDensity) DisplayBridge.setDensity(dpi) else null
+                },
+                shell = if (keepDensity) "wm size reset; wm density $dpi" else "wm size reset; wm density reset",
+                verify = { after ->
+                    !after.isSizeOverridden &&
+                        (after.smallestWidthDp?.let { kotlin.math.abs(it - dp) <= 1 } ?: true)
+                }
+            )
         }
 
         if (percent !in 40..95) return "지원하지 않는 해상도예요."
@@ -594,7 +661,12 @@ object Tuner {
         val h = ((ph * percent / 100.0).roundToInt() / 2) * 2
         if (w < 480 || h < 480) return "해상도가 너무 낮아 적용하지 않았어요."
         val dpi = (min(w, h) * 160.0 / dp).roundToInt().coerceIn(72, 1000)
-        return runChange("wm size ${w}x$h; wm density $dpi", "해상도 ${percent}% 적용")
+        return changeDisplay(
+            label = "해상도 ${percent}% 적용",
+            direct = { DisplayBridge.setSize(w, h) ?: DisplayBridge.setDensity(dpi) },
+            shell = "wm size ${w}x$h; wm density $dpi",
+            verify = { after -> after.widthPx == w && after.heightPx == h }
+        )
     }
 
     /**
@@ -602,18 +674,56 @@ object Tuner {
      * that min(screen width, height) * 160 / density equals the requested dp.
      */
     suspend fun setSmallestWidthDp(dp: Int): String {
-        if (!ShizukuShell.state.ready) return needsShizuku()
         if (dp !in 200..1000) return "최소 너비는 200~1000dp 사이로 입력해 주세요."
         val info = readDisplay().value ?: return "화면 정보를 읽지 못해 적용하지 못했어요."
         val width = info.widthPx ?: return "화면 크기를 읽지 못해 적용하지 못했어요."
         val height = info.heightPx ?: return "화면 크기를 읽지 못해 적용하지 못했어요."
         val targetDpi = (min(width, height) * 160.0 / dp).roundToInt().coerceIn(72, 1000)
-        return runChange("wm density $targetDpi", "최소 너비 ${dp}dp 적용")
+        if (info.densityDpi == targetDpi) return "이미 최소 너비 ${dp}dp예요."
+        return changeDisplay(
+            label = "최소 너비 ${dp}dp 적용",
+            direct = { DisplayBridge.setDensity(targetDpi) },
+            shell = "wm density $targetDpi",
+            verify = { after -> after.smallestWidthDp?.let { kotlin.math.abs(it - dp) <= 1 } == true }
+        )
     }
 
     suspend fun resetSmallestWidth(): String {
-        if (!ShizukuShell.state.ready) return needsShizuku()
-        return runChange("wm density reset", "화면 밀도 기본값 복원")
+        val native = readDisplay().value?.physicalDensityDpi ?: nativeDensity()
+        return changeDisplay(
+            label = "화면 밀도 기본값 복원",
+            direct = { DisplayBridge.clearDensity() },
+            shell = "wm density reset",
+            verify = { after -> native == null || after.densityDpi == native }
+        )
+    }
+
+    /**
+     * Runs one display change: the direct call first, `wm` when that is refused, and a read-back
+     * so a call that returned without changing anything is not reported as done.
+     */
+    private suspend fun changeDisplay(
+        label: String,
+        direct: () -> String?,
+        shell: String,
+        verify: (DisplayInfo) -> Boolean
+    ): String {
+        val directError: String? = direct()
+        val refused = directError != null
+        if (!refused) {
+            delay(350)
+            val after = readDisplay().value
+            if (after == null) return "$label 적용했어요. 화면에서 확인해 주세요."
+            if (verify(after)) return "$label 완료"
+        }
+        if (!ShizukuShell.state.ready) {
+            return if (!refused) {
+                "이 기기에서는 앱이 직접 바꾸지 못했어요."
+            } else {
+                "이 기기에서는 앱이 직접 바꿀 수 없어요. Shizuku를 연결하면 바꿀 수 있어요."
+            }
+        }
+        return runChange(shell, label)
     }
 
     // ---------------------------------------------------------------------------------------
@@ -625,6 +735,20 @@ object Tuner {
         KeySpec("global", "transition_animation_scale", "transition"),
         KeySpec("global", "animator_duration_scale", "animator")
     )
+
+    /**
+     * Reads a scale the user typed: `0.45`, `0.45x` and `45%` all mean 0.45.
+     * Returns null when the text is not a number in 0.05..10.
+     */
+    fun parseAnimationScale(text: String): Double? {
+        val raw = text.trim().removeSuffix("x").removeSuffix("X").removeSuffix("%")
+            .let { it.trim() }
+        if (raw.isEmpty()) return null
+        val percent = text.trim().endsWith("%")
+        val number = raw.toDoubleOrNull() ?: return null
+        val scale = if (percent) number / 100.0 else number
+        return scale.takeIf { it in 0.05..10.0 }
+    }
 
     suspend fun setAnimationScale(which: String, scale: Double): String {
         if (!canWriteSettings()) return needsShizuku()
@@ -656,6 +780,20 @@ object Tuner {
         }
     }
 
+    /** Extra dim intensity, the slider under the toggle (100% = as dim as the panel allows). */
+    suspend fun setExtraDimLevel(percent: Int): String {
+        if (!canWriteSettings()) return needsShizuku()
+        val level = percent.coerceIn(0, 100)
+        if (!applyOps(listOf(Op.Put("secure", EXTRA_DIM_LEVEL, level.toString())))) {
+            return "추가 어둡게 강도를 바꾸지 못했어요."
+        }
+        return when (readDirect("secure", EXTRA_DIM_LEVEL)?.trim()?.toIntOrNull()) {
+            level -> "추가 어둡게 강도 ${level}% 적용"
+            null -> "추가 어둡게 강도 ${level}%를 보냈어요. 화면에서 확인해 주세요."
+            else -> "이 기기에서는 강도가 반영되지 않았어요."
+        }
+    }
+
     // ---------------------------------------------------------------------------------------
     // Power saving mode + high refresh
     // ---------------------------------------------------------------------------------------
@@ -667,7 +805,8 @@ object Tuner {
         KeySpec("system", SETTINGS_MIN, "min"),
         KeySpec("system", SETTINGS_PEAK, "peak"),
         KeySpec("global", PSM_REFRESH_LIMIT, "limit"),
-        KeySpec("global", PSM_REFRESH_TAG, "tag")
+        KeySpec("global", PSM_REFRESH_TAG, "tag"),
+        KeySpec("global", RESTRICTED_PERF, "restricted")
     )
 
     suspend fun readPowerSave(): Loaded<PowerSaveInfo> {
@@ -680,7 +819,8 @@ object Tuner {
                 mode = values["mode"],
                 min = values["min"],
                 peak = values["peak"],
-                refreshLimitEnabled = values["limit"]
+                refreshLimitEnabled = values["limit"],
+                restrictedPerformance = values["restricted"]
             ),
             null
         )
@@ -752,8 +892,43 @@ object Tuner {
         }
     }
 
-    private suspend fun backupPowerSaveState() {
-        val store = prefs ?: return
+    /**
+     * One UI's "CPU 속도 70% 제한": `restricted_device_performance` = "1,1".
+     * The value in place before is kept in the app, and turning the switch off writes it back
+     * (or "0,0" when nothing was there) so the CPU returns to full speed.
+     */
+    suspend fun setCpuLimit(on: Boolean): String {
+        if (!canWriteSettings()) return needsShizuku()
+        val backup = prefs?.getString(KEY_PERF_BACKUP, null)
+        if (on && backup == null) {
+            val current = readDirect("global", RESTRICTED_PERF)
+            prefs?.edit()?.putString(KEY_PERF_BACKUP, current ?: ABSENT)?.apply()
+        }
+        val target = if (on) {
+            CPU_LIMIT_ON
+        } else {
+            backup?.takeIf { it != ABSENT } ?: "0,0"
+        }
+        if (!applyOps(listOf(Op.Put("global", RESTRICTED_PERF, target)))) {
+            return "CPU 속도 제한을 바꾸지 못했어요."
+        }
+        val now = readDirect("global", RESTRICTED_PERF)?.replace(" ", "")
+        val applied = when {
+            now == null -> null
+            on -> now == CPU_LIMIT_ON
+            else -> now != CPU_LIMIT_ON
+        }
+        return when (applied) {
+            null -> "CPU 속도 70% 제한을 보냈어요. 설정 > 배터리에서 확인해 주세요."
+            false -> "이 기기에서는 CPU 제한이 반영되지 않았어요."
+            true -> {
+                if (!on) prefs?.edit()?.remove(KEY_PERF_BACKUP)?.apply()
+                if (on) "CPU 속도 70% 제한 켜짐" else "CPU 속도 70% 제한 꺼짐"
+            }
+        }
+    }
+
+    private suspend fun backupPowerSaveState() {        val store = prefs ?: return
         if (store.getString(KEY_PSM_BACKUP, null) != null) return
         val specs = listOf(
             KeySpec("secure", SETTINGS_MODE, "secure_mode"),
@@ -807,16 +982,17 @@ object Tuner {
         KeySpec("global", "transition_animation_scale", "transition"),
         KeySpec("global", "animator_duration_scale", "animator"),
         KeySpec("secure", "reduce_bright_colors_activated", "extra_dim"),
+        KeySpec("secure", EXTRA_DIM_LEVEL, "extra_dim_level"),
         KeySpec("global", PROTECT_MODE, "protect"),
         KeySpec("global", PROTECT_THRESHOLD, "threshold"),
-        KeySpec("global", "adaptive_battery_management_enabled", "adaptive")
+        KeySpec("global", "adaptive_battery_management_enabled", "adaptive"),
+        KeySpec("global", DOZE_CONSTANTS, "doze")
     )
 
     suspend fun readExtras(): Loaded<ExtrasInfo> {
         val values = readValues(extrasKeys)
         val autoSync = autoSyncEnabled()
-        val doze = readDozeEnabled()
-        if (values.isEmpty() && autoSync == null && doze == null && !canWriteSettings()) {
+        if (values.isEmpty() && autoSync == null && !canWriteSettings()) {
             return Loaded(null, needsShizuku())
         }
         return Loaded(
@@ -826,11 +1002,12 @@ object Tuner {
                 transitionScale = values["transition"],
                 animatorScale = values["animator"],
                 extraDim = values["extra_dim"],
+                extraDimLevel = values["extra_dim_level"],
                 protectMode = values["protect"],
                 protectThreshold = values["threshold"],
                 adaptiveBattery = values["adaptive"],
                 autoSync = autoSync,
-                dozeEnabled = doze
+                dozeConstants = values["doze"]
             ),
             null
         )
@@ -897,30 +1074,38 @@ object Tuner {
         "이 기기에서는 자동 동기화를 바꿀 수 없어요."
     }
 
-    /** Doze state is only visible through dumpsys, so it needs Shizuku. */
-    private suspend fun readDozeEnabled(): Boolean? {
-        if (!ShizukuShell.state.ready) return null
-        val out = (ShizukuShell.exec("dumpsys deviceidle") as? ShellResult.Ok)?.output ?: return null
-        Regex("mEnabled=(true|false)").find(out)?.let { return it.groupValues[1] == "true" }
-        Regex("(?m)^\\s*enabled[:=]\\s*(true|false)").find(out)?.let { return it.groupValues[1] == "true" }
-        return null
-    }
-
-    suspend fun setDozeEnabled(enabled: Boolean): String {
-        if (!ShizukuShell.state.ready) return needsShizuku()
-        val command = if (enabled) {
-            "dumpsys deviceidle enable"
-        } else {
-            "dumpsys deviceidle disable"
+    /**
+     * Quick-Doze: shortens the Doze timings through `device_idle_constants` instead of running
+     * `dumpsys deviceidle` every time. Turning it off puts the previous value back (or deletes
+     * the key when there was none) so the firmware defaults apply again.
+     */
+    suspend fun setQuickDoze(on: Boolean): String {
+        if (!canWriteSettings()) return needsShizuku()
+        val saved = prefs?.getString(KEY_DOZE_BACKUP, null)
+        if (on && saved == null) {
+            val current = readDirect("global", DOZE_CONSTANTS)
+            prefs?.edit()?.putString(KEY_DOZE_BACKUP, current ?: ABSENT)?.apply()
         }
-        val label = if (enabled) "잠자기 모드 켜기" else "잠자기 모드 끄기"
-        val result = runChange(command, label)
-        if (!result.endsWith("완료")) return result
-        val now = readDozeEnabled()
-        return when (now) {
-            enabled -> "$label 완료"
-            null -> "$label 완료 · 상태는 기기에서 확인해 주세요"
-            else -> "$label 실패"
+        val ops = if (on) {
+            listOf(Op.Put("global", DOZE_CONSTANTS, QUICK_DOZE_PRESET))
+        } else {
+            when {
+                saved == null || saved == ABSENT -> listOf(Op.Delete("global", DOZE_CONSTANTS))
+                else -> listOf(Op.Put("global", DOZE_CONSTANTS, saved))
+            }
+        }
+        if (!applyOps(ops)) return "잠자기 모드 설정을 바꾸지 못했어요."
+        val now = readDirect("global", DOZE_CONSTANTS)
+        val applied = isQuickDoze(now)
+        if (applied != on && now != null) {
+            return if (on) "이 기기에서는 잠자기 모드가 반영되지 않았어요."
+            else "잠자기 모드 설정을 되돌리지 못했어요."
+        }
+        if (!on) prefs?.edit()?.remove(KEY_DOZE_BACKUP)?.apply()
+        return when {
+            now == null -> "잠자기 모드 설정을 보냈어요. 기기에서 확인해 주세요."
+            on -> "잠자기 모드 빠른 진입 켜짐"
+            else -> "잠자기 모드 기본값 복원"
         }
     }
 

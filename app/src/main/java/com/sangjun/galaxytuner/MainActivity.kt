@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,13 +39,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
@@ -65,6 +64,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.painterResource
@@ -223,7 +223,6 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
     var display by remember { mutableStateOf<Loaded<DisplayInfo>?>(null) }
     var power by remember { mutableStateOf<Loaded<PowerSaveInfo>?>(null) }
     var extras by remember { mutableStateOf<Loaded<ExtrasInfo>?>(null) }
-    var overlay by remember { mutableStateOf<Boolean?>(null) }
     var loading by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
@@ -236,7 +235,6 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
         display = Tuner.readDisplay()
         power = Tuner.readPowerSave()
         extras = Tuner.readExtras()
-        overlay = Tuner.readRefreshOverlay()
         loading = false
     }
 
@@ -254,7 +252,6 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
     /** Runs one change, refreshes what it touched, and reports the result. */
     fun act(
         reloadDisplay: Boolean = false,
-        reloadOverlay: Boolean = false,
         block: suspend () -> String
     ) {
         if (busy) return
@@ -269,7 +266,6 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
             power = Tuner.readPowerSave()
             extras = Tuner.readExtras()
             if (reloadDisplay) display = Tuner.readDisplay()
-            if (reloadOverlay) overlay = Tuner.readRefreshOverlay()
             busy = false
             snackbar.showSnackbar(message)
         }
@@ -279,35 +275,7 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                Tab.entries.forEach { entry ->
-                    NavigationBarItem(
-                        selected = tab == entry,
-                        onClick = { tab = entry },
-                        icon = {
-                            Icon(
-                                painter = painterResource(entry.icon),
-                                contentDescription = null,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                entry.label,
-                                fontSize = 12.sp,
-                                fontWeight = if (tab == entry) FontWeight.SemiBold else FontWeight.Medium
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    )
-                }
-            }
+            PillNavBar(selected = tab, onSelect = { tab = it })
         }
     ) { inner ->
         Column(
@@ -327,7 +295,7 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                 ) {
                     if (secureWrite) {
                         StatusPill(
-                            text = "설정 권한 있음 · 해상도·배터리는 Shizuku 필요",
+                            text = "설정 권한 있음 · 배터리 정보만 Shizuku 필요",
                             tone = Tone.INFO
                         )
                     } else {
@@ -352,7 +320,6 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                     Tab.REFRESH -> RefreshTab(
                         refresh = refresh,
                         power = power,
-                        overlay = overlay,
                         canWrite = canWrite,
                         busy = busy,
                         onPickRate = { target, hz ->
@@ -364,21 +331,21 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                                 }
                             }
                         },
-                        onOverlay = { on -> act(reloadOverlay = true) { Tuner.setRefreshOverlay(on) } },
                         onPowerSave = { fixed -> act { Tuner.enablePowerSaveHighRefresh(fixed) } },
-                        onDisablePowerSave = { act { Tuner.disablePowerSaveHighRefresh() } }
+                        onDisablePowerSave = { act { Tuner.disablePowerSaveHighRefresh() } },
+                        onCpuLimit = { on -> act { Tuner.setCpuLimit(on) } }
                     )
 
                     Tab.DISPLAY -> DisplayTab(
                         display = display,
                         extras = extras,
-                        ready = shizuku.ready,
                         busy = busy,
                         onResolution = { percent -> act(reloadDisplay = true) { Tuner.applyResolution(percent) } },
                         onDp = { dp -> act(reloadDisplay = true) { Tuner.setSmallestWidthDp(dp) } },
                         onResetDp = { act(reloadDisplay = true) { Tuner.resetSmallestWidth() } },
                         onAnimation = { which, scale -> act { Tuner.setAnimationScale(which, scale) } },
-                        onExtraDim = { on -> act { Tuner.setExtraDim(on) } }
+                        onExtraDim = { on -> act { Tuner.setExtraDim(on) } },
+                        onExtraDimLevel = { percent -> act { Tuner.setExtraDimLevel(percent) } }
                     )
 
                     Tab.BATTERY -> BatteryTab(
@@ -390,7 +357,7 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                             act { Tuner.setBatteryProtection(mode, threshold) }
                         },
                         onAdaptive = { on -> act { Tuner.setAdaptiveBattery(on) } },
-                        onDoze = { on -> act { Tuner.setDozeEnabled(on) } },
+                        onDoze = { on -> act { Tuner.setQuickDoze(on) } },
                         onAutoSync = { on -> act { Tuner.setAutoSync(on) } },
                         onReloadBattery = { scope.launch { battery = Tuner.readBattery() } }
                     )
@@ -489,6 +456,88 @@ private fun AppHeader(onThemeClick: () -> Unit) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Floating pill navigation
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The bottom navigation: one floating capsule with side and bottom margins, a soft shadow and a
+ * thin border, and the selected tab filled with a pill of its own so the choice is unmistakable.
+ */
+@Composable
+private fun PillNavBar(selected: Tab, onSelect: (Tab) -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp)
+            .padding(top = 4.dp, bottom = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(12.dp, RoundedCornerShape(50), clip = false)
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(50)
+                )
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Tab.entries.forEach { entry ->
+                PillNavItem(
+                    tab = entry,
+                    selected = selected == entry,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onSelect(entry) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PillNavItem(
+    tab: Tab,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(50)
+    val content = if (selected) colors.onPrimaryContainer else colors.onSurfaceVariant
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(if (selected) colors.primaryContainer else Color.Transparent, shape)
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp, horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Icon(
+            painter = painterResource(tab.icon),
+            contentDescription = null,
+            tint = content,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(
+            text = tab.label,
+            fontSize = 12.sp,
+            lineHeight = 15.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = content,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -865,13 +914,12 @@ private fun LoadingHint(loaded: Loaded<*>?, need: Need? = null) {
 private fun RefreshTab(
     refresh: Loaded<RefreshInfo>?,
     power: Loaded<PowerSaveInfo>?,
-    overlay: Boolean?,
     canWrite: Boolean,
     busy: Boolean,
     onPickRate: (RateTarget, Int) -> Unit,
-    onOverlay: (Boolean) -> Unit,
     onPowerSave: (Boolean) -> Unit,
-    onDisablePowerSave: () -> Unit
+    onDisablePowerSave: () -> Unit,
+    onCpuLimit: (Boolean) -> Unit
 ) {
     val info = refresh?.value
     val currentMin = info?.minHz
@@ -891,19 +939,6 @@ private fun RefreshTab(
                     Metric(label = "최대", value = currentPeak?.let { "${it}Hz" } ?: "기본")
                     Metric(label = "모드", value = info.modeLabel.substringBefore(" ("))
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                SwitchRow(
-                    title = "화면 재생률 실시간 표시",
-                    subtitle = when (overlay) {
-                        true -> "화면 구석에 지금 주사율이 표시돼요"
-                        false -> "실제로 몇 Hz로 돌아가는지 눈으로 확인해요"
-                        null -> "이 기기에서는 상태를 읽을 수 없어요"
-                    },
-                    checked = overlay == true,
-                    enabled = !busy,
-                    need = Need.MAYBE,
-                    onCheckedChange = onOverlay
-                )
             }
         }
 
@@ -959,7 +994,8 @@ private fun RefreshTab(
             busy = busy || !canWrite,
             canWrite = canWrite,
             onEnable = onPowerSave,
-            onDisable = onDisablePowerSave
+            onDisable = onDisablePowerSave,
+            onCpuLimit = onCpuLimit
         )
     }
 }
@@ -970,14 +1006,16 @@ private fun PowerSaveCard(
     busy: Boolean,
     canWrite: Boolean,
     onEnable: (Boolean) -> Unit,
-    onDisable: () -> Unit
+    onDisable: () -> Unit,
+    onCpuLimit: (Boolean) -> Unit
 ) {
     val info = loaded?.value
     val applied = info?.overrideApplied == true
+    val cpuLimited = info?.cpuLimited == true
 
     SectionCard(
-        title = "절전 모드 120Hz",
-        subtitle = "배터리 절약은 그대로, 화면만 부드럽게",
+        title = "절전 모드 120Hz · CPU 제한",
+        subtitle = "배터리 절약은 그대로, 화면은 부드럽게 · 필요하면 CPU는 70%로",
         need = Need.ONCE
     ) {
         if (info == null) {
@@ -1029,10 +1067,24 @@ private fun PowerSaveCard(
                 }
             }
 
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+            SwitchRow(
+                title = "CPU 속도 70% 제한 적용",
+                subtitle = if (cpuLimited) {
+                    "켜짐 · CPU가 70%로 제한돼 있어요"
+                } else {
+                    "끄면 기본 속도로 돌아가요"
+                },
+                checked = cpuLimited,
+                enabled = !busy,
+                onCheckedChange = onCpuLimit
+            )
+
             if (!canWrite) {
                 NeedNotice(Need.ONCE)
             } else {
-                Hint("설정 > 배터리에서 절전 모드를 켠 상태에서 사용하세요. 해제하면 적용 전 설정으로 돌아가요.")
+                Hint("120Hz 유지는 설정 > 배터리에서 절전 모드를 켠 상태에서 사용하세요. CPU 제한은 절전 모드와 상관없이 적용되고, 끄면 적용 전 값으로 돌아가요.")
             }
         }
     }
@@ -1061,26 +1113,25 @@ private fun evenSize(physical: Int?, percent: Int): Int? {
 private fun DisplayTab(
     display: Loaded<DisplayInfo>?,
     extras: Loaded<ExtrasInfo>?,
-    ready: Boolean,
     busy: Boolean,
     onResolution: (Int) -> Unit,
     onDp: (Int) -> Unit,
     onResetDp: () -> Unit,
     onAnimation: (String, Double) -> Unit,
-    onExtraDim: (Boolean) -> Unit
+    onExtraDim: (Boolean) -> Unit,
+    onExtraDimLevel: (Int) -> Unit
 ) {
     val info = display?.value
-    val sheet = extras?.value
 
     TabContent {
         SectionCard(
             title = "화면 해상도",
             subtitle = "선명함과 배터리 사용량을 함께 조절해요",
-            need = Need.ALWAYS
+            need = Need.MAYBE
         ) {
             if (info == null) {
-                LoadingHint(display, Need.ALWAYS)
-                NeedNotice(Need.ALWAYS)
+                LoadingHint(display)
+                NeedNotice(Need.MAYBE)
             } else {
                 InfoRow(
                     "현재",
@@ -1113,27 +1164,22 @@ private fun DisplayTab(
                     options = options,
                     columns = 3,
                     isSelected = { pct -> kotlin.math.abs(pct - percent) <= 3 },
-                    enabled = !busy && ready,
+                    enabled = !busy,
                     onSelect = onResolution
                 )
-                if (!ready) {
-                    NeedNotice(Need.ALWAYS)
-                } else {
-                    Hint(
-                        if (info.isSizeOverridden) {
-                            "지금은 ${info.widthPx}×${info.heightPx} 로 줄어 있어요. 최소 너비(dp)는 그대로 유지돼요."
-                        } else {
-                            "기기 원본 해상도예요. 낮추면 배터리를 아끼고, 화면은 조금 덜 선명해져요."
-                        }
-                    )
-                }
+                Hint(
+                    if (info.isSizeOverridden) {
+                        "지금은 ${info.widthPx}×${info.heightPx} 로 줄어 있어요. 최소 너비(dp)는 그대로 유지돼요."
+                    } else {
+                        "기기 원본 해상도예요. 낮추면 배터리를 아끼고, 화면은 조금 덜 선명해져요."
+                    }
+                )
             }
         }
 
         DensityCard(
             loaded = display,
-            ready = ready,
-            busy = busy || !ready,
+            busy = busy,
             onApply = onDp,
             onReset = onResetDp
         )
@@ -1144,22 +1190,80 @@ private fun DisplayTab(
             onApply = onAnimation
         )
 
-        SectionCard(
-            title = "추가 어둡게",
-            subtitle = "화면을 한 단계 더 어둡게, 밤에 눈이 편해요",
-            need = Need.ONCE
-        ) {
-            if (sheet == null) {
-                LoadingHint(extras)
-            } else {
-                SwitchRow(
-                    title = "추가 어둡게",
-                    subtitle = if (sheet.extraDim == "1") "켜짐" else "꺼짐",
-                    checked = sheet.extraDim == "1",
-                    enabled = !busy,
-                    onCheckedChange = onExtraDim
+        ExtraDimCard(
+            loaded = extras,
+            busy = busy,
+            onToggle = onExtraDim,
+            onLevel = onExtraDimLevel
+        )
+    }
+}
+
+@Composable
+private fun ExtraDimCard(
+    loaded: Loaded<ExtrasInfo>?,
+    busy: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onLevel: (Int) -> Unit
+) {
+    val sheet = loaded?.value
+
+    SectionCard(
+        title = "추가 어둡게",
+        subtitle = "화면을 한 단계 더 어둡게, 밤에 눈이 편해요",
+        need = Need.ONCE
+    ) {
+        if (sheet == null) {
+            LoadingHint(loaded)
+        } else {
+            val on = sheet.extraDim == "1"
+            SwitchRow(
+                title = "추가 어둡게",
+                subtitle = if (on) "켜짐" else "꺼짐",
+                checked = on,
+                enabled = !busy,
+                onCheckedChange = onToggle
+            )
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+            // The slider keeps the value the user is dragging; the remote value re-seeds it after
+            // every confirmed change.
+            var level by remember(sheet.extraDimPercent) {
+                mutableStateOf((sheet.extraDimPercent ?: 50).toFloat())
+            }
+            val shown = level.roundToInt()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "강도",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "$shown%",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
+            Slider(
+                value = level,
+                onValueChange = { level = it.roundToInt().toFloat() },
+                valueRange = 0f..100f,
+                enabled = !busy,
+                onValueChangeFinished = { onLevel(shown) }
+            )
+            Hint(
+                if (!on) {
+                    "추가 어둡게를 켜면 이 강도로 적용돼요. 기본값은 50%예요."
+                } else {
+                    "화면을 밝게 볼 수 없을 만큼 어두울 때는 강도를 낮춰 주세요."
+                }
+            )
         }
     }
 }
@@ -1167,7 +1271,6 @@ private fun DisplayTab(
 @Composable
 private fun DensityCard(
     loaded: Loaded<DisplayInfo>?,
-    ready: Boolean,
     busy: Boolean,
     onApply: (Int) -> Unit,
     onReset: () -> Unit
@@ -1178,11 +1281,11 @@ private fun DensityCard(
     SectionCard(
         title = "최소 너비 (dp)",
         subtitle = "화면에 담기는 내용의 양을 조절해요",
-        need = Need.ALWAYS
+        need = Need.MAYBE
     ) {
         if (info == null) {
-            LoadingHint(loaded, Need.ALWAYS)
-            NeedNotice(Need.ALWAYS)
+            LoadingHint(loaded)
+            NeedNotice(Need.MAYBE)
         } else {
             val isDefault = !info.isDensityOverridden
             InfoRow("현재", info.smallestWidthDp?.let { "${it}dp" } ?: "-")
@@ -1221,11 +1324,7 @@ private fun DensityCard(
                 ) { Text("적용", fontSize = 14.sp) }
             }
 
-            if (!ready) {
-                NeedNotice(Need.ALWAYS)
-            } else {
-                Hint("개발자 옵션의 '최소 너비'와 같아요. 재부팅하면 원래 값으로 돌아가요.")
-            }
+            Hint("개발자 옵션의 '최소 너비'와 같아요. 재부팅하면 원래 값으로 돌아가요.")
         }
     }
 }
@@ -1283,7 +1382,45 @@ private fun AnimationCard(
                 columns = 4,
                 onSelect = { scale -> onApply(target, scale) }
             )
-            Hint("'전체'를 고르면 세 가지가 한 번에 바뀌어요. 1.0x가 기본 속도예요.")
+
+            // Anything between the presets: 0.45x or 45% both mean 0.45.
+            var typed by remember { mutableStateOf("") }
+            val parsed = Tuner.parseAnimationScale(typed)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = typed,
+                    onValueChange = { text ->
+                        typed = text.filter { it.isDigit() || it == '.' || it == '%' || it == 'x' || it == 'X' }
+                            .take(6)
+                    },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    label = { Text("직접 입력 (0.45 또는 45%)", fontSize = 13.sp) },
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    isError = typed.isNotEmpty() && parsed == null
+                )
+                Button(
+                    onClick = { parsed?.let { onApply(target, it) } },
+                    enabled = !busy && parsed != null,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) { Text("적용", fontSize = 14.sp) }
+            }
+
+            Hint(
+                when {
+                    typed.isNotEmpty() && parsed == null -> "0.05에서 10 사이로 입력해 주세요. 45%처럼 퍼센트로도 넣을 수 있어요."
+                    parsed != null -> "${Tuner.trimScale(String.format(java.util.Locale.US, "%.2f", parsed))}x 로 바뀌어요. 0.05~10 사이만 받아요."
+                    else -> "'전체'를 고르면 세 가지가 한 번에 바뀌어요. 1.0x가 기본 속도예요."
+                }
+            )
         }
     }
 }
@@ -1396,17 +1533,18 @@ private fun BatteryTab(
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 SwitchRow(
-                    title = "잠자기 모드",
-                    subtitle = when (sheet.dozeEnabled) {
-                        true -> "화면이 꺼지면 앱 활동을 잠시 멈춰요"
-                        false -> "꺼져 있어요 · 백그라운드 앱이 계속 돌아요"
-                        null -> "이 기기에서는 상태를 읽을 수 없어요"
+                    title = "잠자기 모드 (빠른 진입)",
+                    subtitle = if (sheet.quickDoze) {
+                        "켜짐 · 화면이 꺼진 뒤 1분 안에 잠자기로 들어가요"
+                    } else {
+                        "꺼짐 · 기기 기본 대기 간격을 써요"
                     },
-                    checked = sheet.dozeEnabled != false,
-                    enabled = !busy && ready,
-                    need = Need.ALWAYS,
+                    checked = sheet.quickDoze,
+                    enabled = !busy,
+                    need = Need.ONCE,
                     onCheckedChange = onDoze
                 )
+                Hint("화면이 꺼진 뒤 잠자기 진입 간격을 줄여 대기 전력을 아낍니다. 끄면 기본값으로 돌아갑니다.")
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 SwitchRow(
                     title = "자동 동기화",
@@ -1416,11 +1554,6 @@ private fun BatteryTab(
                     need = Need.NONE,
                     onCheckedChange = onAutoSync
                 )
-                if (!ready) {
-                    NeedNotice(Need.ALWAYS)
-                } else {
-                    Hint("잠자기 모드를 끄면 알림이 늦게 오는 대신 대기 전력이 늘어나요. 재부팅하면 원래대로 돌아가요.")
-                }
             }
         }
     }
@@ -1502,7 +1635,7 @@ private fun MoreTab(
                     Text("설정 권한 받기")
                 }
             } else {
-                Hint("설정 권한이 있어요. 설정 변경은 Shizuku 없이 동작하고, 해상도·배터리 정보·잠자기만 Shizuku 연결이 필요해요.")
+                Hint("설정 권한이 있어요. 설정 변경은 Shizuku 없이 동작하고, 해상도·최소 너비는 기기에 따라, 배터리 정보만 항상 Shizuku 연결이 필요해요.")
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1521,19 +1654,14 @@ private fun MoreTab(
         ) {
             NeedGroup(
                 need = Need.ALWAYS,
-                items = listOf(
-                    "화면 해상도 변경",
-                    "최소 너비(dp) 변경",
-                    "배터리 건강도 조회 (dumpsys)",
-                    "잠자기 모드 (Doze)"
-                ),
+                items = listOf("배터리 건강도 조회 (dumpsys)"),
                 note = "Shizuku가 켜져 있어야 할 때마다 동작해요."
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             NeedGroup(
                 need = Need.MAYBE,
-                items = listOf("화면 재생률 실시간 표시"),
-                note = "앱이 먼저 직접 시도하고, 막히면 Shizuku로 시도해요."
+                items = listOf("화면 해상도 변경", "최소 너비(dp) 변경"),
+                note = "앱이 숨겨진 IWindowManager로 먼저 시도하고, 기기가 막으면 Shizuku로 시도해요."
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             NeedGroup(
@@ -1541,10 +1669,12 @@ private fun MoreTab(
                 items = listOf(
                     "주사율 최소·최대·고정",
                     "절전 모드에서 120Hz 유지",
+                    "CPU 속도 70% 제한",
                     "애니메이션 배율",
-                    "추가 어둡게",
+                    "추가 어둡게 · 강도",
                     "배터리 보호",
                     "적응형 배터리",
+                    "잠자기 모드 (빠른 진입)",
                     "카메라 셔터음 무음"
                 ),
                 note = "Shizuku로 한 번만 설정 권한을 받으면 그 뒤엔 Shizuku를 꺼도 동작해요."
