@@ -11,9 +11,37 @@ android {
         applicationId = "com.sangjun.galaxytuner"
         minSdk = 29
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.0.7"
+        versionCode = 9
+        versionName = "1.0.8"
         vectorDrawables { useSupportLibrary = true }
+    }
+
+    // Two installable builds of the same app:
+    //   sdk34 - normal build (targetSdk 34), package com.sangjun.galaxytuner
+    //   sdk22 - no-connection refresh rate build (targetSdk 22, package ...sdk22) so
+    //           WRITE_SETTINGS is granted at install time and Settings.System writes work
+    //           without Shizuku, while Android 14 still allows the install with
+    //           --bypass-low-target-sdk-block.
+    flavorDimensions += "sdk"
+    productFlavors {
+        create("sdk34") {
+            dimension = "sdk"
+            minSdk = 29
+            targetSdk = 34
+            resValue("string", "app_name", "Galaxy Tuner")
+            buildConfigField("String", "FLAVOR_NAME", "\"sdk34\"")
+            buildConfigField("int", "COMPAT_TARGET_SDK", "34")
+        }
+        create("sdk22") {
+            dimension = "sdk"
+            minSdk = 29
+            targetSdk = 22
+            applicationIdSuffix = ".sdk22"
+            versionNameSuffix = ""
+            resValue("string", "app_name", "Galaxy Tuner (SDK22)")
+            buildConfigField("String", "FLAVOR_NAME", "\"sdk22\"")
+            buildConfigField("int", "COMPAT_TARGET_SDK", "22")
+        }
     }
 
     signingConfigs {
@@ -63,6 +91,17 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        // extractNativeLibs=true: the sdk22 flavor targets API 22, where native libraries are
+        // loaded from the extracted lib dir (the ADB pairing helper ships libspake2.so).
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    lint {
+        // The sdk22 flavor targets API 22 on purpose; that lint warning is expected.
+        abortOnError = false
+        checkReleaseBuilds = false
     }
 }
 
@@ -82,6 +121,9 @@ dependencies {
 
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
+
+    // Built-in wireless debugging (ADB pairing + shell). Apache-2.0.
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

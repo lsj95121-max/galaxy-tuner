@@ -217,4 +217,38 @@ object ShizukuShell {
             ShellResult.Err("명령 실행 실패: ${t.javaClass.simpleName} ${t.message ?: ""}".trim())
         }
     }
+
+    /**
+     * Runs one command with a file pushed into its stdin, in 64 KB chunks.
+     *
+     * The file sits in app-private storage that uid 2000 cannot open, so the bytes travel through
+     * the binder call instead of a path (`pm install -S <bytes>` reads the APK from stdin).
+     */
+    suspend fun execStream(
+        command: String,
+        file: java.io.File,
+        onProgress: ((Long) -> Unit)? = null
+    ): ShellResult = withContext(Dispatchers.IO) {
+        val svc = awaitService()
+            ?: return@withContext ShellResult.Err(
+                "Shizuku 셸 서비스에 연결되지 않았습니다. Shizuku 실행 상태와 권한을 확인한 뒤 새로고침 해 주세요."
+            )
+        try {
+            svc.startStream(command)
+            var sent = 0L
+            java.io.FileInputStream(file).use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    svc.writeStream(if (read == buffer.size) buffer else buffer.copyOf(read))
+                    sent += read
+                    onProgress?.invoke(sent)
+                }
+            }
+            ShellResult.Ok(svc.finishStream() ?: "")
+        } catch (t: Throwable) {
+            ShellResult.Err("명령 실행 실패: ${t.javaClass.simpleName} ${t.message ?: ""}".trim())
+        }
+    }
 }

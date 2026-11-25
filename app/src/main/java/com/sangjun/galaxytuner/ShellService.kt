@@ -11,6 +11,8 @@ import java.util.concurrent.TimeUnit
  */
 class ShellService : IShellService.Stub() {
 
+    private var stream: Process? = null
+
     override fun destroy() {
         System.exit(0)
     }
@@ -33,6 +35,52 @@ class ShellService : IShellService.Stub() {
             }
         } catch (t: Throwable) {
             "ERROR: ${t.javaClass.simpleName}: ${t.message}"
+        }
+    }
+
+    /**
+     * Starts a command that reads its input from us.
+     *
+     * The APK lives in the app's private storage, which uid 2000 cannot open (SELinux), so the
+     * bytes are pushed through the process' stdin instead of being read from a path:
+     * `pm install -r --bypass-low-target-sdk-block -S <bytes>` takes the package on stdin.
+     */
+    override fun startStream(command: String) {
+        stream?.destroy()
+        stream = try {
+            ProcessBuilder("/system/bin/sh", "-c", command)
+                .redirectErrorStream(true)
+                .start()
+        } catch (t: Throwable) {
+            null
+        }
+        if (stream == null) {
+            throw IllegalStateException("START_ERROR")
+        }
+    }
+
+    override fun writeStream(data: ByteArray) {
+        val process = stream ?: throw IllegalStateException("NOT_STARTED")
+        process.outputStream.write(data)
+        process.outputStream.flush()
+    }
+
+    override fun finishStream(): String {
+        val process = stream ?: return "ERROR: NOT_STARTED"
+        stream = null
+        return try {
+            process.outputStream.close()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val finished = process.waitFor(180, TimeUnit.SECONDS)
+            if (finished) output else "ERROR: timeout\n$output"
+        } catch (t: Throwable) {
+            "ERROR: ${t.javaClass.simpleName}: ${t.message}"
+        } finally {
+            try {
+                process.destroy()
+            } catch (t: Throwable) {
+                // ignore
+            }
         }
     }
 }

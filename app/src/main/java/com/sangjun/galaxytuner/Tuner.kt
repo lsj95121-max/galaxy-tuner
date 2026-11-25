@@ -315,11 +315,11 @@ object Tuner {
             if (value != null) map[spec.alias] = value
         }
         val missing = specs.filter { !map.containsKey(it.alias) }
-        if (missing.isNotEmpty() && ShizukuShell.state.ready) {
+        if (missing.isNotEmpty() && Shell.ready) {
             val command = buildString {
                 missing.forEach { append("printf '${it.alias}='; settings get ${it.ns} ${it.key}; ") }
             }
-            val out = (ShizukuShell.exec(command) as? ShellResult.Ok)?.output.orEmpty()
+            val out = (Shell.exec(command) as? ShellResult.Ok)?.output.orEmpty()
             Regex("(?m)^([a-z0-9_]+)=(.*)$").findAll(out).forEach { match ->
                 val value = match.groupValues[2].trim()
                 if (value.isNotEmpty() && value != "null") map[match.groupValues[1]] = value
@@ -337,18 +337,22 @@ object Tuner {
         var pending = ops
         if (Access.secureWrite) {
             val refused = mutableListOf<Op>()
-            ops.forEach { op ->
-                val result = when (op) {
-                    is Op.Put -> writeDirect(op.ns, op.key, op.value)
-                    is Op.Delete -> writeDirect(op.ns, op.key, null)
-                }
-                if (!result) refused += op
-            }
+            ops.forEach { op -> if (!writeOp(op)) refused += op }
             if (refused.isEmpty()) return true
             // Some keys are refused to apps even with the permission; try them through the shell.
             pending = refused
         }
-        if (!ShizukuShell.state.ready) return false
+        // The Settings.System table only needs WRITE_SETTINGS. The sdk22 build targets API 22, so
+        // the phone grants that at install time and min/peak refresh rate changes work with no
+        // Shizuku and no ADB connection at all.
+        if (pending.isNotEmpty() && Access.systemWrite) {
+            val (systemOps, others) = pending.partition { it.ns == "system" }
+            val refused = systemOps.filter { !writeOp(it) }
+            if (refused.isEmpty() && others.isEmpty()) return true
+            pending = others + refused
+        }
+        if (pending.isEmpty()) return true
+        if (!Shell.ready) return false
         val command = buildString {
             pending.forEach { op ->
                 when (op) {
@@ -357,15 +361,30 @@ object Tuner {
                 }
             }
         }
-        val result = ShizukuShell.exec(command)
+        val result = Shell.exec(command)
         if (result !is ShellResult.Ok) return false
         val out = result.output
         return !out.contains("ERROR") && !out.contains("Exception") && !out.contains("Permission denial")
     }
 
-    private fun canWriteSettings(): Boolean = Access.secureWrite || ShizukuShell.state.ready
+    /** The settings table an op writes to, used to route the sdk22 Settings.System writes. */
+    private val Op.ns: String
+        get() = when (this) {
+            is Op.Put -> ns
+            is Op.Delete -> ns
+        }
 
-    private fun needsShizuku(): String = "이 기능은 Shizuku 연결이 필요해요."
+    private fun writeOp(op: Op): Boolean = when (op) {
+        is Op.Put -> writeDirect(op.ns, op.key, op.value)
+        is Op.Delete -> writeDirect(op.ns, op.key, null)
+    }
+
+    private fun canWriteSettings(): Boolean = Access.canWriteSettings
+
+    /** The secure table (refresh_rate_mode) is only writable with WRITE_SECURE_SETTINGS or a shell. */
+    private fun canWriteSecureTable(): Boolean = Access.secureWrite || Shell.ready
+
+    private fun needsShizuku(): String = "Shizuku 또는 무선 디버깅(ADB) 연결이 필요해요."
 
     // ---------------------------------------------------------------------------------------
     // Battery health
@@ -423,8 +442,8 @@ object Tuner {
     }
 
     suspend fun readBattery(): Loaded<BatteryInfo> {
-        if (!ShizukuShell.state.ready) return Loaded(null, needsShizuku())
-        val dumpsys = ShizukuShell.exec("dumpsys battery")
+        if (!Shell.ready) return Loaded(null, needsShizuku())
+        val dumpsys = Shell.exec("dumpsys battery")
         val raw = when (dumpsys) {
             is ShellResult.Ok -> dumpsys.output
             is ShellResult.Err -> return Loaded(null, dumpsys.message)
@@ -438,7 +457,7 @@ object Tuner {
             append("printf '\\ncharge_full='; cat /sys/class/power_supply/battery/charge_full 2>/dev/null; ")
             append("printf '\\ncharge_full_design='; cat /sys/class/power_supply/battery/charge_full_design 2>/dev/null; echo")
         }
-        val sysfs = (ShizukuShell.exec(sysfsCmd) as? ShellResult.Ok)?.output.orEmpty()
+        val sysfs = (Shell.exec(sysfsCmd) as? ShellResult.Ok)?.output.orEmpty()
 
         val temperature = field(raw, "temperature")?.toDoubleOrNull()?.let { it / 10.0 }
         val info = BatteryInfo(
@@ -494,7 +513,7 @@ object Tuner {
         val current = readRefresh().value
         val peak = current?.peakHz
         val ops = mutableListOf<Op>()
-        ops += Op.Put("secure", SETTINGS_MODE, MODE_ADAPTIVE.toString())
+        if (canWriteSecureTable()) ops += Op.Put("secure", SETTINGS_MODE, MODE_ADAPTIVE.toString())
         ops += rateOp(SETTINGS_MIN, hz)
         if (hz > 0 && peak != null && peak in 1 until hz) ops += rateOp(SETTINGS_PEAK, hz)
         return if (applyOps(ops)) "최소 주사율 ${rateLabel(hz)} 적용 완료" else "최소 주사율을 바꾸지 못했어요."
@@ -506,7 +525,7 @@ object Tuner {
         val current = readRefresh().value
         val minHz = current?.minHz
         val ops = mutableListOf<Op>()
-        ops += Op.Put("secure", SETTINGS_MODE, MODE_ADAPTIVE.toString())
+        if (canWriteSecureTable()) ops += Op.Put("secure", SETTINGS_MODE, MODE_ADAPTIVE.toString())
         ops += rateOp(SETTINGS_PEAK, hz)
         if (hz > 0 && minHz != null && minHz > hz) ops += rateOp(SETTINGS_MIN, hz)
         return if (applyOps(ops)) "최대 주사율 ${rateLabel(hz)} 적용 완료" else "최대 주사율을 바꾸지 못했어요."
@@ -521,22 +540,22 @@ object Tuner {
     suspend fun setFixedRefreshRate(hz: Int): String {
         if (!canWriteSettings()) return needsShizuku()
         val ops = if (hz <= 0) {
-            listOf(
-                Op.Delete("system", SETTINGS_MIN),
-                Op.Delete("system", SETTINGS_PEAK),
-                Op.Delete("secure", SETTINGS_MODE)
-            )
+            buildList {
+                add(Op.Delete("system", SETTINGS_MIN))
+                add(Op.Delete("system", SETTINGS_PEAK))
+                if (canWriteSecureTable()) add(Op.Delete("secure", SETTINGS_MODE))
+            }
         } else {
             val mode = when {
                 hz == 60 -> MODE_STANDARD_60
                 hz > 60 -> MODE_HIGH
                 else -> MODE_ADAPTIVE
             }
-            listOf(
-                Op.Put("secure", SETTINGS_MODE, mode.toString()),
-                Op.Put("system", SETTINGS_MIN, fmt(hz.toDouble())),
-                Op.Put("system", SETTINGS_PEAK, fmt(hz.toDouble()))
-            )
+            buildList {
+                if (canWriteSecureTable()) add(Op.Put("secure", SETTINGS_MODE, mode.toString()))
+                add(Op.Put("system", SETTINGS_MIN, fmt(hz.toDouble())))
+                add(Op.Put("system", SETTINGS_PEAK, fmt(hz.toDouble())))
+            }
         }
         return if (applyOps(ops)) "고정 주사율 ${rateLabel(hz)} 적용 완료" else "고정 주사율을 바꾸지 못했어요."
     }
@@ -571,7 +590,7 @@ object Tuner {
         DisplayBridge.read(AppCtx.context, nativeDensity())?.let { return Loaded(it, null) }
         return Loaded(
             null,
-            if (ShizukuShell.state.ready) {
+            if (Shell.ready) {
                 "화면 크기 정보를 읽지 못했어요."
             } else {
                 "화면 정보를 읽지 못했어요. Shizuku를 연결해 주세요."
@@ -581,8 +600,8 @@ object Tuner {
 
     /** The `wm size` / `wm density` view; null when the shell is closed or the output is unusable. */
     private suspend fun readDisplayShell(): DisplayInfo? {
-        if (!ShizukuShell.state.ready) return null
-        val out = (ShizukuShell.exec("wm size; echo '#SPLIT#'; wm density") as? ShellResult.Ok)?.output ?: return null
+        if (!Shell.ready) return null
+        val out = (Shell.exec("wm size; echo '#SPLIT#'; wm density") as? ShellResult.Ok)?.output ?: return null
         if (out.startsWith("ERROR")) return null
         val parts = out.split("#SPLIT#")
         val sizeText = parts.getOrNull(0).orEmpty()
@@ -716,7 +735,7 @@ object Tuner {
             if (after == null) return "$label 적용했어요. 화면에서 확인해 주세요."
             if (verify(after)) return "$label 완료"
         }
-        if (!ShizukuShell.state.ready) {
+        if (!Shell.ready) {
             return if (!refused) {
                 "이 기기에서는 앱이 직접 바꾸지 못했어요."
             } else {
@@ -1112,8 +1131,8 @@ object Tuner {
     // ---------------------------------------------------------------------------------------
 
     private suspend fun runChange(command: String, label: String): String {
-        if (!ShizukuShell.state.ready) return needsShizuku()
-        return when (val r = ShizukuShell.exec(command)) {
+        if (!Shell.ready) return needsShizuku()
+        return when (val r = Shell.exec(command)) {
             is ShellResult.Ok -> {
                 val out = r.output.trim()
                 val failed = out.startsWith("ERROR") ||

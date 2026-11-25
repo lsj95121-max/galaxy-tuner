@@ -1,6 +1,8 @@
 package com.sangjun.galaxytuner
 
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.annotation.DrawableRes
@@ -67,6 +69,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +81,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.roundToInt
 
 // ---------------------------------------------------------------------------------------------
@@ -154,6 +158,7 @@ class MainActivity : ComponentActivity() {
         Tuner.attach(applicationContext)
         Access.attach(applicationContext)
         ShizukuShell.attach(applicationContext)
+        AdbShell.attach(applicationContext)
         setContent {
             var theme by remember { mutableStateOf(Tuner.theme()) }
             val dark = when (theme) {
@@ -182,6 +187,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         ShizukuShell.refresh()
+        AdbShell.attach(applicationContext)
         Access.refresh()
     }
 }
@@ -213,7 +219,9 @@ private fun Color.luminance(): Float = 0.299f * red + 0.587f * green + 0.114f * 
 private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
     val scope = rememberCoroutineScope()
     val shizuku = ShizukuShell.state
+    val adb = AdbShell.state
     val secureWrite = Access.secureWrite
+    val systemWrite = Access.systemWrite
     val snackbar = remember { SnackbarHostState() }
 
     var tab by rememberSaveable { mutableStateOf(Tab.REFRESH) }
@@ -226,7 +234,7 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
-    val canWrite = shizuku.ready || secureWrite
+    val canWrite = shizuku.ready || adb.connected || secureWrite || systemWrite
 
     suspend fun loadAll() {
         loading = true
@@ -238,15 +246,15 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
         loading = false
     }
 
-    LaunchedEffect(shizuku.ready) {
-        if (shizuku.ready && !Access.secureWrite) {
+    LaunchedEffect(shizuku.ready, adb.connected) {
+        if ((shizuku.ready || adb.connected) && !Access.secureWrite) {
             Access.grant()
             Access.refresh()
         }
     }
 
-    LaunchedEffect(shizuku.ready, secureWrite) {
-        if ((shizuku.ready || secureWrite) && battery == null) loadAll()
+    LaunchedEffect(shizuku.ready, adb.connected, secureWrite, systemWrite) {
+        if ((shizuku.ready || adb.connected || secureWrite) && battery == null) loadAll()
     }
 
     /** Runs one change, refreshes what it touched, and reports the result. */
@@ -286,24 +294,39 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
         ) {
             AppHeader(onThemeClick = { showTheme = true })
 
-            if (!shizuku.ready) {
+            if (!shizuku.ready && !adb.connected) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
                         .padding(bottom = 6.dp)
                 ) {
-                    if (secureWrite) {
-                        StatusPill(
-                            text = "설정 권한 있음 · 배터리 정보만 Shizuku 필요",
+                    when {
+                        secureWrite -> StatusPill(
+                            text = "설정 권한 있음 · 셸 기능은 Shizuku 또는 무선 디버깅 필요",
                             tone = Tone.INFO
                         )
-                    } else {
-                        StatusPill(
-                            text = "Shizuku 미연결 · 일부 기능만 사용 가능",
+                        systemWrite -> StatusPill(
+                            text = "설정 수정 권한만 있음 · 주사율은 연결 없이 동작",
+                            tone = Tone.INFO
+                        )
+                        else -> StatusPill(
+                            text = "Shizuku · 무선 디버깅 미연결 · 일부 기능만 사용 가능",
                             tone = Tone.WARN
                         )
                     }
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 6.dp)
+                ) {
+                    StatusPill(
+                        text = if (shizuku.ready) "Shizuku 연결됨" else "무선 디버깅 연결됨",
+                        tone = Tone.OK
+                    )
                 }
             }
 
@@ -351,7 +374,7 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                     Tab.BATTERY -> BatteryTab(
                         battery = battery,
                         extras = extras,
-                        ready = shizuku.ready,
+                        ready = shizuku.ready || adb.connected,
                         busy = busy,
                         onProtect = { mode, threshold ->
                             act { Tuner.setBatteryProtection(mode, threshold) }
@@ -365,7 +388,9 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                     Tab.MORE -> MoreTab(
                         extras = extras,
                         shizuku = shizuku,
+                        adb = adb,
                         secureWrite = secureWrite,
+                        systemWrite = systemWrite,
                         busy = busy,
                         onShutter = { value -> act { Tuner.applyShutter(value) } },
                         onGrant = {
@@ -377,6 +402,10 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                                 snackbar.showSnackbar(message)
                             }
                         },
+                        onWriteSettings = {
+                            scope.launch { snackbar.showSnackbar(Access.openWriteSettingsScreen()) }
+                            Access.refresh()
+                        },
                         onCheck = {
                             ShizukuShell.refresh()
                             Access.refresh()
@@ -384,7 +413,8 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                                 loadAll()
                                 snackbar.showSnackbar("상태를 다시 확인했어요.")
                             }
-                        }
+                        },
+                        notify = { message -> scope.launch { snackbar.showSnackbar(message) } }
                     )
                 }
             }
@@ -548,20 +578,30 @@ private fun PillNavItem(
 /**
  * What a feature needs before it can run, shown as a badge on its card and row.
  *
- * ALWAYS  - the shell (dumpsys / wm / sysfs) is used, so Shizuku has to be connected every time.
- * MAYBE   - the app tries the call itself first and falls back to the shell; some devices need it.
- * ONCE    - a plain Settings write. WRITE_SECURE_SETTINGS (granted once through Shizuku) is
- *           enough afterwards, so Shizuku can be closed.
- * NONE    - a public API or a local preference; no permission of any kind.
+ * ALWAYS       - the shell (dumpsys / wm / sysfs) is used, so Shizuku or wireless debugging has to
+ *                be connected every time.
+ * MAYBE        - the app tries the call itself first and falls back to the shell; some devices need it.
+ * ONCE         - a plain Settings write. WRITE_SECURE_SETTINGS (granted once through Shizuku or
+ *                wireless debugging) is enough afterwards, so the connection can be closed.
+ * LOCAL_SYSTEM - only the Settings.System table is written, which the sdk22 build may do with the
+ *                WRITE_SETTINGS app-op granted at install.
+ * NONE         - a public API or a local preference; no permission of any kind.
  */
-private enum class Need { ALWAYS, MAYBE, ONCE, NONE }
+private enum class Need { ALWAYS, MAYBE, ONCE, NONE, LOCAL_SYSTEM }
+
+/** The sdk22 build targets API 22, so its refresh-rate writes need no connection at all. */
+private val sdk22Build: Boolean get() = BuildConfig.COMPAT_TARGET_SDK <= 22
 
 private fun needLabel(need: Need): String = when (need) {
-    Need.ALWAYS -> "Shizuku 연결 필요"
+    Need.ALWAYS -> "Shizuku 또는 무선 디버깅 필요"
     Need.MAYBE -> "기기에 따라 Shizuku"
     Need.ONCE -> "Shizuku 1회 설정"
+    Need.LOCAL_SYSTEM -> "설정 수정 권한만으로 동작"
     Need.NONE -> "권한 없이 동작"
 }
+
+/** The badge the refresh-rate cards show: no connection needed on sdk22, shell on sdk34. */
+private fun refreshNeed(): Need = if (sdk22Build) Need.LOCAL_SYSTEM else Need.ALWAYS
 
 @Composable
 private fun NeedBadge(need: Need) {
@@ -570,12 +610,14 @@ private fun NeedBadge(need: Need) {
         Need.ALWAYS -> if (dark) WarnBgDark else WarnBgLight
         Need.MAYBE -> if (dark) WarnBgDark else WarnBgLight
         Need.ONCE -> if (dark) InfoBgDark else InfoBgLight
+        Need.LOCAL_SYSTEM -> if (dark) OkBgDark else OkBgLight
         Need.NONE -> if (dark) OkBgDark else OkBgLight
     }
     val fg = when (need) {
         Need.ALWAYS -> if (dark) WarnFgDark else WarnFgLight
         Need.MAYBE -> if (dark) WarnFgDark else WarnFgLight
         Need.ONCE -> if (dark) InfoFgDark else InfoFgLight
+        Need.LOCAL_SYSTEM -> if (dark) OkFgDark else OkFgLight
         Need.NONE -> if (dark) OkFgDark else OkFgLight
     }
     Box(
@@ -600,9 +642,10 @@ private fun NeedBadge(need: Need) {
 @Composable
 private fun NeedNotice(need: Need) {
     val text = when (need) {
-        Need.ALWAYS -> "Shizuku를 연결해야 이 기능을 쓸 수 있어요. 기타 탭에서 연결 상태를 확인하세요."
-        Need.MAYBE -> "이 기기에서는 Shizuku를 연결해야 동작할 수 있어요."
-        Need.ONCE -> "Shizuku를 한 번 연결해 설정 권한을 받으면, 그 뒤엔 Shizuku를 꺼도 동작해요."
+        Need.ALWAYS -> "Shizuku 또는 무선 디버깅(ADB)을 연결해야 이 기능을 쓸 수 있어요. 기타 탭에 연결 메뉴가 있어요."
+        Need.MAYBE -> "이 기기에서는 Shizuku나 무선 디버깅을 연결해야 동작할 수 있어요."
+        Need.ONCE -> "Shizuku나 무선 디버깅을 한 번 연결해 설정 권한을 받으면, 그 뒤엔 연결 없이 동작해요."
+        Need.LOCAL_SYSTEM -> "설정 수정 권한만 있으면 Shizuku 없이 동작해요. 기타 탭에서 권한을 확인하세요."
         Need.NONE -> return
     }
     Text(
@@ -944,8 +987,12 @@ private fun RefreshTab(
 
         SectionCard(
             title = "주사율 설정",
-            subtitle = "화면이 움직이는 부드러움을 조절해요",
-            need = Need.ONCE
+            subtitle = if (sdk22Build) {
+                "화면이 움직이는 부드러움을 조절해요 · 연결 없이 동작"
+            } else {
+                "화면이 움직이는 부드러움을 조절해요 · Shizuku 또는 무선 디버깅 필요"
+            },
+            need = refreshNeed()
         ) {
             if (info == null) {
                 LoadingHint(refresh)
@@ -976,7 +1023,7 @@ private fun RefreshTab(
                 )
 
                 if (!canWrite) {
-                    NeedNotice(Need.ONCE)
+                    NeedNotice(refreshNeed())
                 } else {
                     Hint(
                         when (target) {
@@ -1015,10 +1062,9 @@ private fun PowerSaveCard(
 
     SectionCard(
         title = "절전 모드 120Hz · CPU 제한",
-        subtitle = "배터리 절약은 그대로, 화면은 부드럽게 · 필요하면 CPU는 70%로",
+        subtitle = "배터리 절약은 그대로, 화면은 부드럽게 · CPU는 70%로",
         need = Need.ONCE
-    ) {
-        if (info == null) {
+    ) {        if (info == null) {
             LoadingHint(loaded)
         } else {
             Row(
@@ -1072,9 +1118,9 @@ private fun PowerSaveCard(
             SwitchRow(
                 title = "CPU 속도 70% 제한 적용",
                 subtitle = if (cpuLimited) {
-                    "켜짐 · CPU가 70%로 제한돼 있어요"
+                    "켜짐 · 게임을 포함해 전체 CPU 속도가 70%로 제한됩니다"
                 } else {
-                    "끄면 기본 속도로 돌아가요"
+                    "켜면 게임을 포함해 전체 CPU 속도가 70%로 제한됩니다"
                 },
                 checked = cpuLimited,
                 enabled = !busy,
@@ -1084,7 +1130,7 @@ private fun PowerSaveCard(
             if (!canWrite) {
                 NeedNotice(Need.ONCE)
             } else {
-                Hint("120Hz 유지는 설정 > 배터리에서 절전 모드를 켠 상태에서 사용하세요. CPU 제한은 절전 모드와 상관없이 적용되고, 끄면 적용 전 값으로 돌아가요.")
+                Hint("CPU 속도 70% 제한을 켜면 게임을 포함한 모든 앱의 CPU 속도가 70%로 제한됩니다. 절전 모드와 상관없이 적용되고, 끄면 적용 전 값으로 돌아갑니다. 화면 주사율 유지는 설정 > 배터리에서 절전 모드를 켠 상태에서 사용하세요.")
             }
         }
     }
@@ -1567,15 +1613,51 @@ private fun BatteryTab(
 private fun MoreTab(
     extras: Loaded<ExtrasInfo>?,
     shizuku: ShizukuState,
+    adb: AdbState,
     secureWrite: Boolean,
+    systemWrite: Boolean,
     busy: Boolean,
     onShutter: (Int) -> Unit,
     onGrant: () -> Unit,
-    onCheck: () -> Unit
+    onWriteSettings: () -> Unit,
+    onCheck: () -> Unit,
+    notify: (String) -> Unit
 ) {
     val sheet = extras?.value
+    val context = LocalContext.current
+    val shellReady = shizuku.ready || adb.connected
 
     TabContent {
+        UpdateCard(notify = notify)
+
+        WirelessAdbCard(adb = adb, notify = notify)
+
+        SectionCard(
+            title = "Shizuku · 개발자 옵션 바로가기",
+            subtitle = "한 번 눌러 해당 화면을 열어요",
+            need = Need.NONE
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { notify(openShizukuApp(context)) },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                ) { Text("Shizuku 앱 열기", fontSize = 13.sp) }
+                OutlinedButton(
+                    onClick = { notify(openDeveloperOptions(context)) },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                ) { Text("개발자 옵션", fontSize = 13.sp) }
+            }
+            Hint(
+                if (shellReady) {
+                    "셸이 연결되어 있어요. 설정 권한을 받아 두면 배터리 정보 같은 셸 기능만 연결이 필요해요."
+                } else {
+                    "Shizuku 앱에서 '무선 디버깅으로 시작'을 누르거나, 위 무선 디버깅(ADB) 카드에서 폰 안에서 직접 페어링하면 됩니다."
+                }
+            )
+        }
+
         SectionCard(title = "카메라", subtitle = "셔터 소리를 끌 수 있어요", need = Need.ONCE) {
             if (sheet == null) {
                 LoadingHint(extras)
@@ -1598,7 +1680,7 @@ private fun MoreTab(
 
         SectionCard(
             title = "권한과 연결",
-            subtitle = "Shizuku는 설정을 바꿀 때만 쓰여요"
+            subtitle = "Shizuku 또는 무선 디버깅, 둘 중 하나만 연결되면 돼요"
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1606,8 +1688,13 @@ private fun MoreTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 StatusPill(
-                    text = if (shizuku.binderAlive) "Shizuku 실행 중" else "Shizuku 꺼짐",
-                    tone = if (shizuku.binderAlive) Tone.OK else Tone.WARN
+                    text = when {
+                        shizuku.ready -> "Shizuku 연결됨"
+                        adb.connected -> "무선 디버깅 연결됨"
+                        shizuku.binderAlive -> "Shizuku 실행 중"
+                        else -> "연결 없음"
+                    },
+                    tone = if (shellReady) Tone.OK else Tone.WARN
                 )
                 StatusPill(
                     text = if (secureWrite) "설정 권한 있음" else "설정 권한 없음",
@@ -1622,20 +1709,41 @@ private fun MoreTab(
                 }
             }
 
-            if (!shizuku.binderAlive) {
-                Hint("Shizuku 앱을 열고 '무선 디버깅으로 시작'을 누른 뒤 아래 '다시 확인'을 눌러 주세요.")
-            } else if (!shizuku.permissionGranted) {
-                Hint("Shizuku 권한을 허용하면 설정 권한을 자동으로 받아요.")
-                Button(onClick = { ShizukuShell.requestPermission() }, shape = RoundedCornerShape(12.dp)) {
-                    Text("권한 허용")
+            when {
+                !shellReady && !shizuku.binderAlive -> {
+                    Hint("Shizuku 앱을 열어 '무선 디버깅으로 시작'을 누르거나, 무선 디버깅(ADB) 카드에서 페어링해 주세요.")
                 }
-            } else if (!secureWrite) {
-                Hint("설정 권한을 한 번만 받으면 주사율·애니메이션·배터리 보호·셔터음은 Shizuku를 꺼도 동작해요.")
-                Button(onClick = onGrant, enabled = !busy, shape = RoundedCornerShape(12.dp)) {
-                    Text("설정 권한 받기")
+                shizuku.binderAlive && !shizuku.permissionGranted -> {
+                    Hint("Shizuku 권한을 허용하면 설정 권한을 자동으로 받아요.")
+                    Button(onClick = { ShizukuShell.requestPermission() }, shape = RoundedCornerShape(12.dp)) {
+                        Text("권한 허용")
+                    }
                 }
-            } else {
-                Hint("설정 권한이 있어요. 설정 변경은 Shizuku 없이 동작하고, 해상도·최소 너비는 기기에 따라, 배터리 정보만 항상 Shizuku 연결이 필요해요.")
+                !secureWrite -> {
+                    Hint("설정 권한을 한 번만 받으면 주사율·애니메이션·배터리 보호·셔터음은 연결 없이 동작해요.")
+                    Button(onClick = onGrant, enabled = !busy, shape = RoundedCornerShape(12.dp)) {
+                        Text("설정 권한 받기")
+                    }
+                }
+                else -> {
+                    Hint("설정 권한이 있어요. 설정 변경은 연결 없이 동작하고, 해상도·최소 너비는 기기에 따라, 배터리 정보만 셸 연결이 필요해요.")
+                }
+            }
+
+            if (!secureWrite && sdk22Build) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                Hint(
+                    if (systemWrite) {
+                        "sdk22판은 시스템 설정 수정 권한이 이미 있어서 주사율은 연결 없이 바뀌어요. 나머지 항목은 설정 권한을 한 번 받아 주세요."
+                    } else {
+                        "주사율을 연결 없이 바꾸려면 시스템 설정 수정 권한을 허용해 주세요."
+                    }
+                )
+                OutlinedButton(
+                    onClick = onWriteSettings,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                ) { Text("설정 수정 권한 허용", fontSize = 13.sp) }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1649,25 +1757,32 @@ private fun MoreTab(
         }
 
         SectionCard(
-            title = "기능별 Shizuku 필요 여부",
+            title = "기능별 필요 여부",
             subtitle = "기능마다 필요한 연결이 달라요"
         ) {
             NeedGroup(
                 need = Need.ALWAYS,
                 items = listOf("배터리 건강도 조회 (dumpsys)"),
-                note = "Shizuku가 켜져 있어야 할 때마다 동작해요."
+                note = "셸(uid 2000) 명령이라 Shizuku 또는 무선 디버깅이 켜져 있어야 할 때마다 동작해요."
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             NeedGroup(
                 need = Need.MAYBE,
                 items = listOf("화면 해상도 변경", "최소 너비(dp) 변경"),
-                note = "앱이 숨겨진 IWindowManager로 먼저 시도하고, 기기가 막으면 Shizuku로 시도해요."
+                note = "앱이 숨겨진 IWindowManager로 먼저 시도하고, 기기가 막으면 셸(wm)로 시도해요."
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            if (sdk22Build) {
+                NeedGroup(
+                    need = Need.LOCAL_SYSTEM,
+                    items = listOf("주사율 최소·최대·고정"),
+                    note = "sdk22판은 targetSdk 22라서 설치할 때 WRITE_SETTINGS가 허용되고, Settings.System(min_refresh_rate·peak_refresh_rate)을 연결 없이 직접 씁니다."
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+            }
             NeedGroup(
                 need = Need.ONCE,
                 items = listOf(
-                    "주사율 최소·최대·고정",
                     "절전 모드에서 120Hz 유지",
                     "CPU 속도 70% 제한",
                     "애니메이션 배율",
@@ -1677,18 +1792,346 @@ private fun MoreTab(
                     "잠자기 모드 (빠른 진입)",
                     "카메라 셔터음 무음"
                 ),
-                note = "Shizuku로 한 번만 설정 권한을 받으면 그 뒤엔 Shizuku를 꺼도 동작해요."
+                note = "Shizuku나 무선 디버깅으로 한 번만 설정 권한(WRITE_SECURE_SETTINGS)을 받으면 그 뒤엔 연결 없이 동작해요."
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             NeedGroup(
                 need = Need.NONE,
-                items = listOf("자동 동기화", "앱 테마", "지금 상태 조회"),
+                items = listOf("자동 동기화", "앱 테마", "지금 상태 조회", "업데이트 확인"),
                 note = "권한 없이 바로 동작해요."
             )
         }
 
         Hint("값을 바꾸면 바로 적용돼요. 해상도·최소 너비는 재부팅하면 원래대로 돌아가요.")
         Hint("일부 항목은 기기와 One UI 버전에 따라 제공되지 않을 수 있어요.")
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tab 4 — 업데이트 (GitHub 릴리즈 확인 + 한 번에 설치)
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+private fun UpdateCard(notify: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var release by remember { mutableStateOf<ReleaseInfo?>(null) }
+    var checked by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
+    var phase by remember { mutableStateOf("") }
+    var progress by remember { mutableStateOf(-1f) }
+    var failure by remember { mutableStateOf<String?>(null) }
+
+    suspend fun check() {
+        checking = true
+        failure = null
+        val result = Update.latest()
+        checking = false
+        checked = true
+        result.onSuccess { release = it }.onFailure {
+            release = null
+            failure = it.message ?: it.javaClass.simpleName
+        }
+    }
+
+    LaunchedEffect(Unit) { check() }
+
+    val newer = release?.let { Update.isNewer(it.version) } == true
+
+    SectionCard(
+        title = "업데이트",
+        subtitle = "GitHub 최신 릴리즈를 확인하고 바로 설치해요",
+        need = Need.NONE
+    ) {
+        InfoRow(
+            "지금 버전",
+            "v${BuildConfig.VERSION_NAME} · " +
+                if (sdk22Build) "sdk22 무연결 주사율판" else "sdk34 일반판"
+        )
+        val shown = release
+        when {
+            checking && shown == null -> Hint("최신 버전을 확인하는 중이에요…")
+            failure != null -> ErrorText("확인 실패: $failure")
+            shown != null -> {
+                InfoRow("최신 버전", "v${shown.version}")
+                if (newer) {
+                    InfoRow("내려받을 파일", shown.assetName ?: "이 판에 맞는 APK가 없어요")
+                    if (shown.assetSize > 0) {
+                        InfoRow("크기", Update.formatSize(shown.assetSize))
+                    }
+                }
+            }
+            checked -> Hint("릴리즈 정보를 읽지 못했어요.")
+        }
+
+        if (progress >= 0f) {
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        } else if (working || checking) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        }
+        if (phase.isNotEmpty()) {
+            Hint(phase)
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { scope.launch { check() } },
+                enabled = !checking && !working,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+            ) { Text(if (checking) "확인 중…" else "최신 버전 확인", fontSize = 14.sp) }
+
+            if (newer && release != null) {
+                Button(
+                    onClick = {
+                        val target = release ?: return@Button
+                        scope.launch {
+                            working = true
+                            progress = -1f
+                            phase = "APK를 내려받는 중이에요…"
+                            try {
+                                val apk = Update.download(context, target) { done, total ->
+                                    progress = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else -1f
+                                }
+                                progress = -1f
+                                phase = if (Shell.ready) "설치 파일을 보내는 중이에요…" else "설치 화면을 준비하는 중이에요…"
+                                val message = Update.install(context, apk)
+                                phase = ""
+                                notify(message)
+                            } catch (t: Throwable) {
+                                phase = ""
+                                notify("업데이트 실패: ${t.message ?: t.javaClass.simpleName}")
+                            } finally {
+                                working = false
+                                progress = -1f
+                            }
+                        }
+                    },
+                    enabled = !working,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) { Text(if (working) "진행 중…" else "다운로드 및 설치", fontSize = 14.sp) }
+            }
+        }
+
+        Hint(
+            if (sdk22Build) {
+                "sdk22판은 Android 14 이상에서 시스템 설치 화면이 막혀 있어 Shizuku나 무선 디버깅이 연결되어 있어야 설치돼요. 연결되어 있으면 조용히 설치됩니다."
+            } else {
+                "Shizuku나 무선 디버깅이 연결되어 있으면 조용히 설치되고, 아니면 Android 설치 화면이 열립니다."
+            }
+        )
+        if (!newer && release != null) {
+            Hint("지금 최신 버전이에요.")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tab 4 — 무선 디버깅 (ADB) 페어링·연결
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+private fun WirelessAdbCard(adb: AdbState, notify: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var host by remember { mutableStateOf(AdbShell.localAddress()) }
+    var pairPort by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var connectPort by remember { mutableStateOf("") }
+    var working by remember { mutableStateOf(false) }
+    var finding by remember { mutableStateOf(false) }
+
+    SectionCard(
+        title = "무선 디버깅 (ADB)",
+        subtitle = "폰 안에서 직접 페어링하고 셸 명령을 실행해요",
+        need = Need.NONE
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StatusPill(
+                text = if (adb.connected) "연결됨" else "꺼짐",
+                tone = if (adb.connected) Tone.OK else Tone.WARN
+            )
+            Text(
+                text = if (adb.connected) {
+                    "${adb.host ?: host}${if (adb.port > 0) ":${adb.port}" else ""} 로 연결되어 있어요"
+                } else {
+                    "Shizuku 없이도 셸 명령을 실행할 수 있어요"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        OutlinedButton(
+            onClick = { notify(openDeveloperOptions(context)) },
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+        ) { Text("무선 디버깅 설정 열기 (개발자 옵션)", fontSize = 13.sp) }
+
+        Hint("개발자 옵션에서 '무선 디버깅'을 켜고 '페어링 코드로 기기 페어링'을 누르면 IP 주소·포트와 6자리 코드가 나와요. 페어링 포트와 연결 포트는 서로 달라요.")
+
+        OutlinedTextField(
+            value = host,
+            onValueChange = { host = it.trim() },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            label = { Text("IP 주소", fontSize = 13.sp) },
+            textStyle = MaterialTheme.typography.bodyMedium,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = pairPort,
+                onValueChange = { text -> pairPort = text.filter { it.isDigit() }.take(5) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                label = { Text("페어링 포트", fontSize = 13.sp) },
+                textStyle = MaterialTheme.typography.bodyMedium,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+            OutlinedTextField(
+                value = code,
+                onValueChange = { text -> code = text.filter { it.isDigit() }.take(6) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                label = { Text("6자리 코드", fontSize = 13.sp) },
+                textStyle = MaterialTheme.typography.bodyMedium,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    scope.launch {
+                        working = true
+                        val message = AdbShell.pair(host, pairPort.toIntOrNull() ?: -1, code)
+                        working = false
+                        notify(message)
+                    }
+                },
+                enabled = !working && pairPort.isNotEmpty() && code.length == 6,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) { Text("페어링", fontSize = 14.sp) }
+
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        finding = true
+                        val port = AdbShell.findPairingPort()
+                        finding = false
+                        if (port > 0) {
+                            pairPort = port.toString()
+                            notify("페어링 포트 $port 를 찾았어요.")
+                        } else {
+                            notify("페어링 포트를 찾지 못했어요. 화면에 나온 포트를 직접 입력해 주세요.")
+                        }
+                    }
+                },
+                enabled = !finding,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+            ) { Text(if (finding) "찾는 중…" else "포트 자동 찾기", fontSize = 13.sp) }
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = connectPort,
+                onValueChange = { text -> connectPort = text.filter { it.isDigit() }.take(5) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                label = { Text("연결 포트 (비우면 자동)", fontSize = 13.sp) },
+                textStyle = MaterialTheme.typography.bodyMedium,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+            Button(
+                onClick = {
+                    scope.launch {
+                        working = true
+                        val message = AdbShell.connect(host, connectPort.toIntOrNull() ?: -1)
+                        working = false
+                        notify(message)
+                    }
+                },
+                enabled = !working,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) { Text(if (working) "연결 중…" else "연결", fontSize = 14.sp) }
+        }
+
+        if (adb.connected) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        AdbShell.disconnect()
+                        notify("무선 디버깅 연결을 끊었어요.")
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                ) { Text("연결 해제", fontSize = 13.sp) }
+            }
+        }
+
+        Hint("한 번 페어링하면 이 앱의 키가 폰에 저장되어, 다음부터는 연결만 누르면 됩니다. 개발자 옵션에서 무선 디버깅을 껐다 켜면 연결 포트가 바뀌어요.")
+    }
+}
+
+private fun openDeveloperOptions(context: android.content.Context): String = try {
+    context.startActivity(
+        Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    )
+    "개발자 옵션을 열었어요."
+} catch (t: Throwable) {
+    "개발자 옵션을 열지 못했어요. 설정 > 휴대전화 정보 > 소프트웨어 정보에서 직접 열어 주세요."
+}
+
+private fun openShizukuApp(context: android.content.Context): String {
+    val launch = try {
+        context.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+    } catch (t: Throwable) {
+        null
+    } ?: return "Shizuku 앱이 설치되어 있지 않아요. Play 스토어에서 Shizuku를 설치해 주세요."
+    return try {
+        context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        "Shizuku 앱을 열었어요."
+    } catch (t: Throwable) {
+        "Shizuku 앱을 열지 못했어요."
     }
 }
 
