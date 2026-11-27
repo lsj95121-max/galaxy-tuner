@@ -132,7 +132,10 @@ object QuickDoze {
             store.edit().putString(KEY_BSAVER_BACKUP, current ?: ABSENT).apply()
         }
         val merged = mergeQuickDoze(current, on = true)
-        if (!writeGlobal(context, BSAVER_KEY, merged) || !hasQuickDoze(readGlobal(context, BSAVER_KEY))) {
+        // Only the write itself is checked. Recent One UI builds empty `battery_saver_constants`
+        // again moments later; reading the flag back here used to fail after a successful write
+        // and left the switch off. The service re-applies the flag on every screen-off.
+        if (!writeGlobal(context, BSAVER_KEY, merged)) {
             return "잠자기 모드 설정을 쓰지 못했어요."
         }
         store.edit().putBoolean(KEY_ENABLED, true).apply()
@@ -203,6 +206,9 @@ object QuickDoze {
         if (!isEnabled(context)) return
         val store = prefs(context)
         if (store.getBoolean(KEY_LOW_POWER_TOUCHED, false)) return
+        // The platform clears the flag on some One UI builds, so it is put back before battery
+        // saver is turned on — otherwise `low_power=1` would take the normal, slow doze path.
+        ensureQuickDozeFlag(context)
         val current = readGlobal(context, LOW_POWER_KEY)
         val alreadyOn = current?.trim() == "1"
         store.edit()
@@ -216,6 +222,13 @@ object QuickDoze {
                 .putBoolean(KEY_LOW_POWER_TOUCHED, false)
                 .apply()
         }
+    }
+
+    /** Puts `quick_doze_enabled=true` back into `battery_saver_constants` if it went missing. */
+    private fun ensureQuickDozeFlag(context: Context) {
+        val current = readGlobal(context, BSAVER_KEY)
+        if (hasQuickDoze(current)) return
+        writeGlobal(context, BSAVER_KEY, mergeQuickDoze(current, on = true))
     }
 
     /** 화면 켜짐: put `low_power` back to the value it had before the screen went off. */

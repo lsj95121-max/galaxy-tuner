@@ -151,15 +151,24 @@ data class ExtrasInfo(
     val protectThreshold: String?,
     val adaptiveBattery: String?,
     val autoSync: Boolean?,
-    val batterySaverConstants: String?
+    val batterySaverConstants: String?,
+    /** The switch as the app remembers it: true while the resident service is meant to be on. */
+    val quickDozeEnabled: Boolean = false
 ) {
     val animationScale: String? get() = windowScale ?: transitionScale ?: animatorScale
 
     /** Extra dim intensity 0..100; null when the firmware keeps no level. */
     val extraDimPercent: Int? get() = extraDimLevel?.trim()?.toIntOrNull()?.coerceIn(0, 100)
 
-    /** True while `battery_saver_constants` carries the quick-doze flag written by [QuickDoze]. */
-    val quickDoze: Boolean get() = QuickDoze.hasQuickDoze(batterySaverConstants)
+    /**
+     * The 잠자기 모드 switch.
+     *
+     * The stored switch is the primary source, because Android 17 / One UI 9 clears
+     * `battery_saver_constants` moments after it is written while `QuickDozeService` keeps running.
+     * The flag in `battery_saver_constants` still counts as on, so a flag set outside the app (or
+     * one that survived a preference reset) is shown too.
+     */
+    val quickDoze: Boolean get() = quickDozeEnabled || QuickDoze.hasQuickDoze(batterySaverConstants)
 
     val protectionLabel: String
         get() = when (protectMode) {
@@ -1010,7 +1019,8 @@ object Tuner {
                 protectThreshold = values["threshold"],
                 adaptiveBattery = values["adaptive"],
                 autoSync = autoSync,
-                batterySaverConstants = values["bsaver"]
+                batterySaverConstants = values["bsaver"],
+                quickDozeEnabled = AppCtx.context?.let { QuickDoze.isEnabled(it) } == true
             ),
             null
         )
@@ -1093,7 +1103,9 @@ object Tuner {
                 return "잠자기 모드는 설정 권한(1회)이 있어야 켤 수 있어요. 기타 탭에서 설정 권한을 받은 뒤 다시 켜 주세요."
             }
             QuickDoze.enable(context, canWrite = true)?.let { return it }
-            return if (QuickDoze.hasQuickDoze(readDirect("global", BATTERY_SAVER_CONSTANTS))) {
+            // The system may blank `battery_saver_constants` right after the write, so the stored
+            // switch (and the service it starts) is what tells whether the mode is on.
+            return if (QuickDoze.isEnabled(context) || QuickDoze.hasQuickDoze(readDirect("global", BATTERY_SAVER_CONSTANTS))) {
                 "잠자기 모드 켜짐 · 화면이 꺼지면 절전을 잠깐 켜서 바로 잠자기로 들어가요"
             } else {
                 "이 기기에서는 잠자기 모드 설정이 반영되지 않았어요."

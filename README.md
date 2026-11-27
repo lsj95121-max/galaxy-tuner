@@ -13,11 +13,11 @@
 | 패키지 | `com.sangjun.galaxytuner` | `com.sangjun.galaxytuner.sdk22` |
 | 앱 이름 | Galaxy Tuner | Galaxy Tuner (SDK22) |
 | targetSdk | 34 | **22** |
-| APK | `GalaxyTuner-v1.0.10-sdk34-debug.apk` | `GalaxyTuner-v1.0.10-sdk22-debug.apk` |
+| APK | `GalaxyTuner-v1.0.11-sdk34-debug.apk` | `GalaxyTuner-v1.0.11-sdk22-debug.apk` |
 | 주사율 배지 | `Shizuku 또는 무선 디버깅 필요` | `설정 수정 권한만으로 동작` |
 
-두 판은 패키지가 달라 **한 폰에 같이 설치**할 수 있습니다. 빌드는 모두 `versionCode 11`,
-`versionName 1.0.10`이고 1.0.0~1.0.9와 **같은 디버그 키**로 서명합니다.
+두 판은 패키지가 달라 **한 폰에 같이 설치**할 수 있습니다. 빌드는 모두 `versionCode 12`,
+`versionName 1.0.11`이고 1.0.0~1.0.10과 **같은 디버그 키**로 서명합니다.
 
 - **sdk34**는 지금까지 쓰던 일반판입니다. v1.0.7 위에 그대로 덮어쓰기 업데이트됩니다.
 - **sdk22**는 `targetSdk 22`로 빌드해, 설치할 때 **`WRITE_SETTINGS`가 자동으로 허용**되는 판입니다.
@@ -30,7 +30,7 @@
 **PC ADB**
 
 ```bash
-adb install --bypass-low-target-sdk-block GalaxyTuner-v1.0.10-sdk22-debug.apk
+adb install --bypass-low-target-sdk-block GalaxyTuner-v1.0.11-sdk22-debug.apk
 # 설정 권한까지 미리 주려면 (선택, 셸 기능용)
 adb shell pm grant com.sangjun.galaxytuner.sdk22 android.permission.WRITE_SECURE_SETTINGS
 ```
@@ -40,15 +40,32 @@ adb shell pm grant com.sangjun.galaxytuner.sdk22 android.permission.WRITE_SECURE
 1. **Install with Options** 앱 + Shizuku: APK를 고르고 **`Bypass Low Target SDK Block`** 을 체크해 설치.
 2. **LADB** 같은 로컬 ADB 셸에서 `pm install` 경로를 직접 입력:
    ```bash
-   pm install -r --bypass-low-target-sdk-block /sdcard/Download/GalaxyTuner-v1.0.10-sdk22-debug.apk
+   pm install -r --bypass-low-target-sdk-block /sdcard/Download/GalaxyTuner-v1.0.11-sdk22-debug.apk
    # 또는
-   pm install -r --bypass-low-target-sdk-block /storage/emulated/0/Download/GalaxyTuner-v1.0.10-sdk22-debug.apk
+   pm install -r --bypass-low-target-sdk-block /storage/emulated/0/Download/GalaxyTuner-v1.0.11-sdk22-debug.apk
    ```
 3. 이미 sdk34판이 Shizuku에 연결되어 있다면, 앱의 **업데이트** 카드에서 sdk22 APK를 내려받아
    **다운로드 및 설치**를 누르면 Shizuku 셸이 대신 설치합니다(`pm install -r --bypass-low-target-sdk-block -S <bytes>`).
 
 > 설치 후 Android가 "이전 버전용 앱" 경고를 띄울 수 있습니다. sdk22판의 정상 동작이며,
 > 주사율·최소 너비처럼 `Settings.System`만 쓰는 기능은 연결 없이 바로 동작합니다.
+
+## 1.0.11에서 고친 것
+
+### 잠자기 모드 — 켜짐 안내 뒤 스위치가 다시 꺼지던 문제
+
+- 사용자 실기기(SM-S938N, Android 17 / One UI 9.0)에서 "켜짐" 스낵바가 뜬 직후 스위치가 다시
+  `꺼짐`으로 돌아갔습니다. 원인은 `Tuner.setQuickDoze(true)` 직후에는 `battery_saver_constants`에
+  `quick_doze_enabled=true`가 읽히는데, 바로 뒤 `MainActivity.act`가 `Tuner.readExtras()`를 부를 때는
+  시스템이 그 값을 비워 `ExtrasInfo.quickDoze`가 `false`가 된 것입니다.
+- **스위치 상태**: `ExtrasInfo`에 `quickDozeEnabled`(앱에 저장된 스위치 상태)를 추가하고,
+  `quickDoze = quickDozeEnabled || hasQuickDoze(battery_saver_constants)`로 바꿨습니다. 시스템이
+  `battery_saver_constants`를 비워도 서비스가 켜져 있는 동안에는 스위치가 ON을 유지하고, 다시 누르면
+  `setQuickDoze(false)`가 정상 호출됩니다.
+- **켜기**: `writeGlobal`이 성공하면 직후 값을 다시 읽어 확인하지 않습니다(시스템이 곧 비우는 경우
+  실패로 처리되어 스위치가 꺼지던 원인). 저장된 스위치와 상주 서비스로 상태를 유지합니다.
+- **화면 꺼짐**: `low_power=1`을 쓰기 전에 `battery_saver_constants`에 `quick_doze_enabled=true`가
+  빠져 있으면 다시 써 줍니다. 값이 비워져도 실제로는 빠른 잠자기 경로를 타게 하기 위해서입니다.
 
 ## 1.0.10에서 고친 것
 
@@ -222,8 +239,8 @@ export JAVA_HOME=/path/to/jdk-17
 export ANDROID_HOME=/path/to/android-sdk   # platforms;android-34, build-tools;34.0.0
 gradle assembleSdk34Debug assembleSdk22Debug
 # 결과
-#   app/build/outputs/apk/sdk34/debug/app-sdk34-debug.apk  -> GalaxyTuner-v1.0.10-sdk34-debug.apk
-#   app/build/outputs/apk/sdk22/debug/app-sdk22-debug.apk  -> GalaxyTuner-v1.0.10-sdk22-debug.apk
+#   app/build/outputs/apk/sdk34/debug/app-sdk34-debug.apk  -> GalaxyTuner-v1.0.11-sdk34-debug.apk
+#   app/build/outputs/apk/sdk22/debug/app-sdk22-debug.apk  -> GalaxyTuner-v1.0.11-sdk22-debug.apk
 ```
 
 의존성: Jetpack Compose(Material 3), Shizuku API 13.1.5, 무선 디버깅 페어링·TLS 연결을 위해
@@ -244,12 +261,12 @@ gradle assembleSdk34Debug assembleSdk22Debug
 - 절전 모드 + 120Hz는 One UI 5/6 일부 조합에서 설정만으로 즉시 반영되지 않을 수 있습니다.
 - `restricted_device_performance` 값 형식은 펌웨어마다 다를 수 있습니다. 앱은 `"1,1"`을 쓰고,
   끌 때 이전 값(없으면 `"0,0"`)으로 되돌립니다.
-- `battery_saver_constants`에 쓴 `enable_quick_doze=true`는 재부팅해도 남습니다. 앱에서 끄면
+- `battery_saver_constants`에 쓴 `quick_doze_enabled=true`는 재부팅해도 남습니다. 앱에서 끄면
   백업해 둔 원래 값으로 돌아가고, 원래 값이 없었으면 키를 지웁니다.
 - 잠자기 모드는 **화면이 꺼진 동안 절전 모드(`low_power`)를 켜는 방식**이라, 그 사이 시스템이
   "배터리 절약 모드" 알림을 띄울 수 있습니다. 화면을 켜면 앱이 원래대로(대부분 꺼짐) 되돌립니다.
   사용자가 직접 켜 둔 절전 모드는 건드리지 않습니다.
-- 빠른 잠자기(`enable_quick_doze`)는 AOSP `BatterySaverPolicy` 기준 동작이라, 삼성 펌웨어 개조에 따라
+- 빠른 잠자기(`quick_doze_enabled`)는 AOSP `BatterySaverPolicy` 기준 동작이라, 삼성 펌웨어 개조에 따라
   효과가 다를 수 있습니다. **실기기 검증 전입니다.**
 - 상주 서비스는 `specialUse` foreground service라 켜 둔 동안 알림이 하나 유지됩니다(알림 권한을 끈
   경우엔 표시되지 않지만 서비스는 계속 동작).
