@@ -23,11 +23,11 @@ import androidx.core.content.ContextCompat
  *
  * `device_idle_constants` is deprecated and no longer stored on recent One UI builds (writing it
  * leaves the switch off because reading it back returns null). The platform's own battery saver
- * policy reads `battery_saver_constants`, where `enable_quick_doze=true` switches DeviceIdle to
- * its short STATE_QUICK_DOZE_DELAY path.
+ * policy reads `battery_saver_constants`, where `quick_doze_enabled=true` switches DeviceIdle to
+ * its short STATE_QUICK_DOZE_DELAY path (the same key Galaxy Max Hz writes).
  *
  * So the flow is:
- *  1. 켤 때: the value of `battery_saver_constants` is backed up, `enable_quick_doze=true` is
+ *  1. 켤 때: the value of `battery_saver_constants` is backed up, `quick_doze_enabled=true` is
  *     merged into it, and the resident service is started.
  *  2. 화면이 꺼지면: `low_power` (the battery saver switch) is turned on — its previous value is
  *     kept — and the system enters quick doze within seconds.
@@ -53,7 +53,10 @@ object QuickDoze {
     const val BSAVER_KEY = "battery_saver_constants"
     const val LOW_POWER_KEY = "low_power"
 
-    private const val QUICK_DOZE_FLAG = "enable_quick_doze"
+    private const val QUICK_DOZE_FLAG = "quick_doze_enabled"
+
+    /** The wrong key v1.0.9 wrote; stripped wherever it is met so it cannot linger. */
+    private const val LEGACY_QUICK_DOZE_FLAG = "enable_quick_doze"
     private const val ABSENT = "__absent__"
 
     fun prefs(context: Context): SharedPreferences =
@@ -61,7 +64,7 @@ object QuickDoze {
 
     fun isEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_ENABLED, false)
 
-    /** True when `battery_saver_constants` carries `enable_quick_doze=true`. */
+    /** True when `battery_saver_constants` carries `quick_doze_enabled=true`. */
     fun hasQuickDoze(raw: String?): Boolean = raw
         ?.split(',')
         ?.map { it.trim() }
@@ -70,13 +73,17 @@ object QuickDoze {
                 pair.substringAfter('=', "").trim() == "true"
         } == true
 
+    private fun isQuickDozeKey(pair: String): Boolean = pair.substringBefore('=').trim().let {
+        it == QUICK_DOZE_FLAG || it == LEGACY_QUICK_DOZE_FLAG
+    }
+
     /** The same list with the quick-doze flag set (or removed), every other entry kept. */
     internal fun mergeQuickDoze(raw: String?, on: Boolean): String {
         val entries = raw.orEmpty()
             .split(',')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .filterNot { it.substringBefore('=').trim() == QUICK_DOZE_FLAG }
+            .filterNot { isQuickDozeKey(it) }
             .toMutableList()
         if (on) entries += "$QUICK_DOZE_FLAG=true"
         return entries.joinToString(",")
@@ -90,6 +97,16 @@ object QuickDoze {
 
     private fun writeGlobal(context: Context, key: String, value: String?): Boolean = try {
         Settings.Global.putString(context.contentResolver, key, value)
+    } catch (t: Throwable) {
+        false
+    }
+
+    /**
+     * Removes the row itself. Needed on Android 17, where `putString(key, null)` no longer deletes
+     * `battery_saver_constants`.
+     */
+    private fun deleteGlobal(context: Context, key: String): Boolean = try {
+        context.contentResolver.delete(Settings.Global.CONTENT_URI, "name = ?", arrayOf(key)) > 0
     } catch (t: Throwable) {
         false
     }
@@ -127,24 +144,58 @@ object QuickDoze {
     /**
      * Turns the feature off: stops the service, puts `low_power` back if it is still ours and
      * restores the original `battery_saver_constants` (deleting the key when there was none).
+     *
+     * When there was no backup the row is deleted with a content-resolver delete, because a null
+     * write is ignored on Android 17; if the flag survives that, it is cut out of whatever the row
+     * holds. The switch is only reported off after the value is read back without the flag.
      */
     fun disable(context: Context, canWrite: Boolean): String? {
         val store = prefs(context)
         stop(context)
         store.edit().putBoolean(KEY_ENABLED, false).apply()
-        if (canWrite) {
-            restoreLowPower(context)
-            val saved = store.getString(KEY_BSAVER_BACKUP, null)
-            val value = if (saved == null || saved == ABSENT) null else saved
-            if (writeGlobal(context, BSAVER_KEY, value)) {
-                store.edit().remove(KEY_BSAVER_BACKUP).apply()
-            } else {
-                return "잠자기 모드를 껐지만 원래 설정을 되돌리지 못했어요."
-            }
-        } else {
+        if (!canWrite) {
             store.edit().remove(KEY_BSAVER_BACKUP).apply()
+            return null
         }
-        return null
+        restoreLowPower(context)
+        val saved = store.getString(KEY_BSAVER_BACKUP, null)
+        // A backup taken before the switch was turned on normally has no flag; it is stripped
+        // anyway so no quick-doze flag can come back out of a restore.
+        val target = if (saved == null || saved == ABSENT || saved.isBlank()) null
+        else mergeQuickDoze(saved, on = false)
+        if (!clearQuickDoze(context, target)) {
+            return "잠자기 모드를 껐지만 원래 설정을 되돌리지 못했어요. 앱을 다시 열어 한 번 더 꺼 주세요."
+        }
+        store.edit().remove(KEY_BSAVER_BACKUP).apply()
+        return if (hasQuickDoze(readGlobal(context, BSAVER_KEY))) {
+            "잠자기 모드를 껐지만 기기 설정에 아직 남아 있어요. 앱을 다시 열어 한 번 더 꺼 주세요."
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Puts `battery_saver_constants` back to [target] (`null` = the key should not exist) and makes
+     * sure no quick-doze flag is left. Returns true when the value read back is clean.
+     */
+    private fun clearQuickDoze(context: Context, target: String?): Boolean {
+        if (target != null) {
+            writeGlobal(context, BSAVER_KEY, target)
+            if (!hasQuickDoze(readGlobal(context, BSAVER_KEY))) return true
+        } else {
+            deleteGlobal(context, BSAVER_KEY)
+            if (!hasQuickDoze(readGlobal(context, BSAVER_KEY))) return true
+        }
+        // Either the row is still there after the delete or the restored value carried the flag:
+        // cut the flag out of what is stored now, and drop the row if nothing else is left.
+        val stripped = mergeQuickDoze(readGlobal(context, BSAVER_KEY), on = false)
+        if (stripped.isEmpty()) {
+            deleteGlobal(context, BSAVER_KEY)
+            if (readGlobal(context, BSAVER_KEY) != null) writeGlobal(context, BSAVER_KEY, "")
+        } else {
+            writeGlobal(context, BSAVER_KEY, stripped)
+        }
+        return !hasQuickDoze(readGlobal(context, BSAVER_KEY))
     }
 
     /** 화면 꺼짐: remember `low_power`, then turn battery saver on so DeviceIdle takes the quick path. */

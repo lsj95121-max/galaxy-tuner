@@ -1081,7 +1081,7 @@ object Tuner {
      * 잠자기 모드 (Quick-Doze).
      *
      * `device_idle_constants` is deprecated from Android 12 on and recent One UI builds no longer
-     * store it, so the switch works through `battery_saver_constants`' `enable_quick_doze` flag and
+     * store it, so the switch works through `battery_saver_constants`' `quick_doze_enabled` flag and
      * the small resident service in [QuickDoze] that turns battery saver on while the screen is off
      * and puts it back when the screen comes on. Everything is a plain Settings.Global write, so the
      * one-time WRITE_SECURE_SETTINGS grant is all it needs.
@@ -1100,7 +1100,11 @@ object Tuner {
             }
         }
         QuickDoze.disable(context, canWrite = Access.secureWrite)?.let { return it }
-        return "잠자기 모드 꺼짐 · 기기 기본 대기 간격으로 돌아왔어요"
+        return if (QuickDoze.hasQuickDoze(readDirect("global", BATTERY_SAVER_CONSTANTS))) {
+            "잠자기 모드를 껐지만 기기 설정에 아직 남아 있어요. 한 번 더 눌러 주세요."
+        } else {
+            "잠자기 모드 꺼짐 · 기기 기본 대기 간격으로 돌아왔어요"
+        }
     }
 
     // ---------------------------------------------------------------------------------------

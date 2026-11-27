@@ -13,11 +13,11 @@
 | 패키지 | `com.sangjun.galaxytuner` | `com.sangjun.galaxytuner.sdk22` |
 | 앱 이름 | Galaxy Tuner | Galaxy Tuner (SDK22) |
 | targetSdk | 34 | **22** |
-| APK | `GalaxyTuner-v1.0.9-sdk34-debug.apk` | `GalaxyTuner-v1.0.9-sdk22-debug.apk` |
+| APK | `GalaxyTuner-v1.0.10-sdk34-debug.apk` | `GalaxyTuner-v1.0.10-sdk22-debug.apk` |
 | 주사율 배지 | `Shizuku 또는 무선 디버깅 필요` | `설정 수정 권한만으로 동작` |
 
-두 판은 패키지가 달라 **한 폰에 같이 설치**할 수 있습니다. 빌드는 모두 `versionCode 10`,
-`versionName 1.0.9`이고 1.0.0~1.0.8과 **같은 디버그 키**로 서명합니다.
+두 판은 패키지가 달라 **한 폰에 같이 설치**할 수 있습니다. 빌드는 모두 `versionCode 11`,
+`versionName 1.0.10`이고 1.0.0~1.0.9와 **같은 디버그 키**로 서명합니다.
 
 - **sdk34**는 지금까지 쓰던 일반판입니다. v1.0.7 위에 그대로 덮어쓰기 업데이트됩니다.
 - **sdk22**는 `targetSdk 22`로 빌드해, 설치할 때 **`WRITE_SETTINGS`가 자동으로 허용**되는 판입니다.
@@ -30,7 +30,7 @@
 **PC ADB**
 
 ```bash
-adb install --bypass-low-target-sdk-block GalaxyTuner-v1.0.9-sdk22-debug.apk
+adb install --bypass-low-target-sdk-block GalaxyTuner-v1.0.10-sdk22-debug.apk
 # 설정 권한까지 미리 주려면 (선택, 셸 기능용)
 adb shell pm grant com.sangjun.galaxytuner.sdk22 android.permission.WRITE_SECURE_SETTINGS
 ```
@@ -40,9 +40,9 @@ adb shell pm grant com.sangjun.galaxytuner.sdk22 android.permission.WRITE_SECURE
 1. **Install with Options** 앱 + Shizuku: APK를 고르고 **`Bypass Low Target SDK Block`** 을 체크해 설치.
 2. **LADB** 같은 로컬 ADB 셸에서 `pm install` 경로를 직접 입력:
    ```bash
-   pm install -r --bypass-low-target-sdk-block /sdcard/Download/GalaxyTuner-v1.0.9-sdk22-debug.apk
+   pm install -r --bypass-low-target-sdk-block /sdcard/Download/GalaxyTuner-v1.0.10-sdk22-debug.apk
    # 또는
-   pm install -r --bypass-low-target-sdk-block /storage/emulated/0/Download/GalaxyTuner-v1.0.9-sdk22-debug.apk
+   pm install -r --bypass-low-target-sdk-block /storage/emulated/0/Download/GalaxyTuner-v1.0.10-sdk22-debug.apk
    ```
 3. 이미 sdk34판이 Shizuku에 연결되어 있다면, 앱의 **업데이트** 카드에서 sdk22 APK를 내려받아
    **다운로드 및 설치**를 누르면 Shizuku 셸이 대신 설치합니다(`pm install -r --bypass-low-target-sdk-block -S <bytes>`).
@@ -50,9 +50,26 @@ adb shell pm grant com.sangjun.galaxytuner.sdk22 android.permission.WRITE_SECURE
 > 설치 후 Android가 "이전 버전용 앱" 경고를 띄울 수 있습니다. sdk22판의 정상 동작이며,
 > 주사율·최소 너비처럼 `Settings.System`만 쓰는 기능은 연결 없이 바로 동작합니다.
 
+## 1.0.10에서 고친 것
+
+### 잠자기 모드 — 플래그 키와 끄기 수정
+
+- **플래그 키**: `battery_saver_constants`에서 실제로 읽히는 키는 `enable_quick_doze`가 아니라
+  **`quick_doze_enabled`** 입니다(Galaxy Max Hz v8.1의 `classes.dex`에서 확인). 켤 때
+  `quick_doze_enabled=true`를 병합하고, 스위치 상태도 이 키로 읽습니다. v1.0.9가 남긴
+  `enable_quick_doze` 항목은 설정을 쓸 때 함께 걷어냅니다.
+- **끄기가 안 되던 문제**: Android 17에서는 `putString(key, null)`이 `battery_saver_constants` 행을
+  지우지 못해, 끄기 토스트가 나온 뒤에도 스위치가 다시 켜졌습니다. 이제 백업값이 없으면
+  `contentResolver.delete(Settings.Global.CONTENT_URI, "name = ?")`로 행을 지우고, 그래도 플래그가
+  남아 있으면 그 값에서 플래그만 잘라내 다시 씁니다(남는 항목이 없으면 빈 값/삭제).
+  백업값이 있으면 플래그를 뺀 값으로 복원하고, 마지막에 **`quick_doze_enabled`가 없는지 읽어 확인한
+  뒤에만** "꺼짐"으로 알려 줍니다.
+
 ## 1.0.9에서 새로 생긴 것
 
 ### 잠자기 모드 (Quick-Doze) — `battery_saver_constants` + 화면 연동
+
+> 1.0.10에서 플래그 키를 `quick_doze_enabled`로 바로잡고 끄기 동작을 고쳤습니다(위 항목 참고).
 
 `Settings.Global.device_idle_constants`는 Android 12부터 폐기되어 최근 One UI(Android 17)에서는
 값이 저장·반영되지 않습니다(써도 다시 읽으면 `null`). 그래서 AOSP `BatterySaverPolicy`가 읽는
@@ -205,8 +222,8 @@ export JAVA_HOME=/path/to/jdk-17
 export ANDROID_HOME=/path/to/android-sdk   # platforms;android-34, build-tools;34.0.0
 gradle assembleSdk34Debug assembleSdk22Debug
 # 결과
-#   app/build/outputs/apk/sdk34/debug/app-sdk34-debug.apk  -> GalaxyTuner-v1.0.9-sdk34-debug.apk
-#   app/build/outputs/apk/sdk22/debug/app-sdk22-debug.apk  -> GalaxyTuner-v1.0.9-sdk22-debug.apk
+#   app/build/outputs/apk/sdk34/debug/app-sdk34-debug.apk  -> GalaxyTuner-v1.0.10-sdk34-debug.apk
+#   app/build/outputs/apk/sdk22/debug/app-sdk22-debug.apk  -> GalaxyTuner-v1.0.10-sdk22-debug.apk
 ```
 
 의존성: Jetpack Compose(Material 3), Shizuku API 13.1.5, 무선 디버깅 페어링·TLS 연결을 위해
