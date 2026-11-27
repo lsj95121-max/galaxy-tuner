@@ -136,25 +136,9 @@ data class PowerSaveInfo(
 internal const val CPU_LIMIT_ON = "1,1"
 
 /**
- * Quick-Doze preset for `device_idle_constants` (global).
- *
- * The key holds a comma separated list of Doze timings. Writing a short list makes the phone fall
- * into light/deep idle a minute after the screen goes off and keeps the maintenance window tight,
- * the same effect `dumpsys deviceidle force-idle`-style tools get without running a shell every
- * time. Clearing the key (or putting the value that was there before back) returns the firmware
- * defaults.
- */
-internal const val QUICK_DOZE_PRESET =
-    "inactive_to=60000,idle_after_inactive_to=0,idle_pending_to=60000,idle_to=600000," +
-        "light_after_inactive_to=0,light_idle_to=60000,light_idle_maintenance_min_interval=30000," +
-        "light_idle_maintenance_max_interval=60000"
-
-internal fun isQuickDoze(raw: String?): Boolean = raw?.replace(" ", "") == QUICK_DOZE_PRESET
-
-/**
  * Everything that lives in Settings but does not deserve its own shell round-trip:
  * camera shutter, animation scales, extra dim, battery protection, adaptive battery,
- * master sync and Doze.
+ * master sync and the battery saver constants Quick-Doze rides on.
  */
 data class ExtrasInfo(
     val shutter: String?,
@@ -167,15 +151,15 @@ data class ExtrasInfo(
     val protectThreshold: String?,
     val adaptiveBattery: String?,
     val autoSync: Boolean?,
-    val dozeConstants: String?
+    val batterySaverConstants: String?
 ) {
     val animationScale: String? get() = windowScale ?: transitionScale ?: animatorScale
 
     /** Extra dim intensity 0..100; null when the firmware keeps no level. */
     val extraDimPercent: Int? get() = extraDimLevel?.trim()?.toIntOrNull()?.coerceIn(0, 100)
 
-    /** True while the Quick-Doze preset is the value of `device_idle_constants`. */
-    val quickDoze: Boolean get() = isQuickDoze(dozeConstants)
+    /** True while `battery_saver_constants` carries the quick-doze flag written by [QuickDoze]. */
+    val quickDoze: Boolean get() = QuickDoze.hasQuickDoze(batterySaverConstants)
 
     val protectionLabel: String
         get() = when (protectMode) {
@@ -205,7 +189,6 @@ object Tuner {
     private const val KEY_THEME = "theme_mode"
     private const val KEY_PSM_BACKUP = "psm_refresh_backup"
     private const val KEY_PERF_BACKUP = "restricted_performance_backup"
-    private const val KEY_DOZE_BACKUP = "device_idle_constants_backup"
     private const val KEY_NATIVE_DENSITY = "native_density_dpi"
     private const val ABSENT = "__absent__"
 
@@ -229,8 +212,9 @@ object Tuner {
     // Samsung power saving CPU limit (global table): "1,1" = CPU 70%.
     private const val RESTRICTED_PERF = "restricted_device_performance"
 
-    // Doze timings (global table) and the extra dim intensity (secure table).
-    private const val DOZE_CONSTANTS = "device_idle_constants"
+    // Battery saver constants (global table) that carry the quick-doze flag, and the extra dim
+    // intensity (secure table). `device_idle_constants` is deprecated on Android 12+.
+    private const val BATTERY_SAVER_CONSTANTS = "battery_saver_constants"
     private const val EXTRA_DIM_LEVEL = "reduce_bright_colors_level"
 
     // Samsung battery protection (One UI 6.1+: global table).
@@ -1005,7 +989,7 @@ object Tuner {
         KeySpec("global", PROTECT_MODE, "protect"),
         KeySpec("global", PROTECT_THRESHOLD, "threshold"),
         KeySpec("global", "adaptive_battery_management_enabled", "adaptive"),
-        KeySpec("global", DOZE_CONSTANTS, "doze")
+        KeySpec("global", BATTERY_SAVER_CONSTANTS, "bsaver")
     )
 
     suspend fun readExtras(): Loaded<ExtrasInfo> {
@@ -1026,7 +1010,7 @@ object Tuner {
                 protectThreshold = values["threshold"],
                 adaptiveBattery = values["adaptive"],
                 autoSync = autoSync,
-                dozeConstants = values["doze"]
+                batterySaverConstants = values["bsaver"]
             ),
             null
         )
@@ -1094,38 +1078,29 @@ object Tuner {
     }
 
     /**
-     * Quick-Doze: shortens the Doze timings through `device_idle_constants` instead of running
-     * `dumpsys deviceidle` every time. Turning it off puts the previous value back (or deletes
-     * the key when there was none) so the firmware defaults apply again.
+     * 잠자기 모드 (Quick-Doze).
+     *
+     * `device_idle_constants` is deprecated from Android 12 on and recent One UI builds no longer
+     * store it, so the switch works through `battery_saver_constants`' `enable_quick_doze` flag and
+     * the small resident service in [QuickDoze] that turns battery saver on while the screen is off
+     * and puts it back when the screen comes on. Everything is a plain Settings.Global write, so the
+     * one-time WRITE_SECURE_SETTINGS grant is all it needs.
      */
     suspend fun setQuickDoze(on: Boolean): String {
-        if (!canWriteSettings()) return needsShizuku()
-        val saved = prefs?.getString(KEY_DOZE_BACKUP, null)
-        if (on && saved == null) {
-            val current = readDirect("global", DOZE_CONSTANTS)
-            prefs?.edit()?.putString(KEY_DOZE_BACKUP, current ?: ABSENT)?.apply()
-        }
-        val ops = if (on) {
-            listOf(Op.Put("global", DOZE_CONSTANTS, QUICK_DOZE_PRESET))
-        } else {
-            when {
-                saved == null || saved == ABSENT -> listOf(Op.Delete("global", DOZE_CONSTANTS))
-                else -> listOf(Op.Put("global", DOZE_CONSTANTS, saved))
+        val context = AppCtx.context ?: return "앱 정보를 읽지 못했어요."
+        if (on) {
+            if (!Access.secureWrite) {
+                return "잠자기 모드는 설정 권한(1회)이 있어야 켤 수 있어요. 기타 탭에서 설정 권한을 받은 뒤 다시 켜 주세요."
+            }
+            QuickDoze.enable(context, canWrite = true)?.let { return it }
+            return if (QuickDoze.hasQuickDoze(readDirect("global", BATTERY_SAVER_CONSTANTS))) {
+                "잠자기 모드 켜짐 · 화면이 꺼지면 절전을 잠깐 켜서 바로 잠자기로 들어가요"
+            } else {
+                "이 기기에서는 잠자기 모드 설정이 반영되지 않았어요."
             }
         }
-        if (!applyOps(ops)) return "잠자기 모드 설정을 바꾸지 못했어요."
-        val now = readDirect("global", DOZE_CONSTANTS)
-        val applied = isQuickDoze(now)
-        if (applied != on && now != null) {
-            return if (on) "이 기기에서는 잠자기 모드가 반영되지 않았어요."
-            else "잠자기 모드 설정을 되돌리지 못했어요."
-        }
-        if (!on) prefs?.edit()?.remove(KEY_DOZE_BACKUP)?.apply()
-        return when {
-            now == null -> "잠자기 모드 설정을 보냈어요. 기기에서 확인해 주세요."
-            on -> "잠자기 모드 빠른 진입 켜짐"
-            else -> "잠자기 모드 기본값 복원"
-        }
+        QuickDoze.disable(context, canWrite = Access.secureWrite)?.let { return it }
+        return "잠자기 모드 꺼짐 · 기기 기본 대기 간격으로 돌아왔어요"
     }
 
     // ---------------------------------------------------------------------------------------

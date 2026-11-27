@@ -11,8 +11,8 @@ android {
         applicationId = "com.sangjun.galaxytuner"
         minSdk = 29
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.0.8"
+        versionCode = 10
+        versionName = "1.0.9"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -124,6 +124,10 @@ dependencies {
 
     // Built-in wireless debugging (ADB pairing + shell). Apache-2.0.
     implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
+    // libadb pairs over TLS 1.3 and exports keying material through Conscrypt. The platform copy
+    // (com.android.org.conscrypt) has no public exportKeyingMaterial, which is what made Android 17
+    // pairing fail with NoSuchMethodException; this library ships org.conscrypt with the method.
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

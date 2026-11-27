@@ -159,6 +159,7 @@ class MainActivity : ComponentActivity() {
         Access.attach(applicationContext)
         ShizukuShell.attach(applicationContext)
         AdbShell.attach(applicationContext)
+        QuickDoze.sync(applicationContext)
         setContent {
             var theme by remember { mutableStateOf(Tuner.theme()) }
             val dark = when (theme) {
@@ -1581,7 +1582,7 @@ private fun BatteryTab(
                 SwitchRow(
                     title = "잠자기 모드 (빠른 진입)",
                     subtitle = if (sheet.quickDoze) {
-                        "켜짐 · 화면이 꺼진 뒤 1분 안에 잠자기로 들어가요"
+                        "켜짐 · 화면이 꺼지면 절전을 잠깐 켜서 바로 잠자기로 들어가요"
                     } else {
                         "꺼짐 · 기기 기본 대기 간격을 써요"
                     },
@@ -1590,7 +1591,7 @@ private fun BatteryTab(
                     need = Need.ONCE,
                     onCheckedChange = onDoze
                 )
-                Hint("화면이 꺼진 뒤 잠자기 진입 간격을 줄여 대기 전력을 아낍니다. 끄면 기본값으로 돌아갑니다.")
+                Hint("화면이 꺼지면 절전을 잠깐 켜서 몇 초 만에 깊은 잠자기로 들어가고, 화면을 켜면 원래대로 돌아와요. 켜 둔 동안 알림이 하나 유지돼요(알림을 끈 경우엔 보이지 않아요).")
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 SwitchRow(
                     title = "자동 동기화",
@@ -1834,8 +1835,6 @@ private fun UpdateCard(notify: (String) -> Unit) {
             failure = it.message ?: it.javaClass.simpleName
         }
     }
-
-    LaunchedEffect(Unit) { check() }
 
     val newer = release?.let { Update.isNewer(it.version) } == true
 
