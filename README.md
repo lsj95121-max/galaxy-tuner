@@ -13,11 +13,11 @@
 | 패키지 | `com.sangjun.galaxytuner` | `com.sangjun.galaxytuner.sdk22` |
 | 앱 이름 | Galaxy Tuner | Galaxy Tuner (SDK22) |
 | targetSdk | 34 | **22** |
-| APK | `GalaxyTuner-v1.0.11-sdk34-debug.apk` | `GalaxyTuner-v1.0.11-sdk22-debug.apk` |
+| APK | `GalaxyTuner-v1.0.12-sdk34-debug.apk` | `GalaxyTuner-v1.0.12-sdk22-debug.apk` |
 | 주사율 배지 | `Shizuku 또는 무선 디버깅 필요` | `설정 수정 권한만으로 동작` |
 
-두 판은 패키지가 달라 **한 폰에 같이 설치**할 수 있습니다. 빌드는 모두 `versionCode 12`,
-`versionName 1.0.11`이고 1.0.0~1.0.10과 **같은 디버그 키**로 서명합니다.
+두 판은 패키지가 달라 **한 폰에 같이 설치**할 수 있습니다. 빌드는 모두 `versionCode 13`,
+`versionName 1.0.12`이고 1.0.0~1.0.11과 **같은 디버그 키**로 서명합니다.
 
 - **sdk34**는 지금까지 쓰던 일반판입니다. v1.0.7 위에 그대로 덮어쓰기 업데이트됩니다.
 - **sdk22**는 `targetSdk 22`로 빌드해, 설치할 때 **`WRITE_SETTINGS`가 자동으로 허용**되는 판입니다.
@@ -30,7 +30,7 @@
 **PC ADB**
 
 ```bash
-adb install --bypass-low-target-sdk-block GalaxyTuner-v1.0.11-sdk22-debug.apk
+adb install --bypass-low-target-sdk-block GalaxyTuner-v1.0.12-sdk22-debug.apk
 # 설정 권한까지 미리 주려면 (선택, 셸 기능용)
 adb shell pm grant com.sangjun.galaxytuner.sdk22 android.permission.WRITE_SECURE_SETTINGS
 ```
@@ -40,15 +40,48 @@ adb shell pm grant com.sangjun.galaxytuner.sdk22 android.permission.WRITE_SECURE
 1. **Install with Options** 앱 + Shizuku: APK를 고르고 **`Bypass Low Target SDK Block`** 을 체크해 설치.
 2. **LADB** 같은 로컬 ADB 셸에서 `pm install` 경로를 직접 입력:
    ```bash
-   pm install -r --bypass-low-target-sdk-block /sdcard/Download/GalaxyTuner-v1.0.11-sdk22-debug.apk
+   pm install -r --bypass-low-target-sdk-block /sdcard/Download/GalaxyTuner-v1.0.12-sdk22-debug.apk
    # 또는
-   pm install -r --bypass-low-target-sdk-block /storage/emulated/0/Download/GalaxyTuner-v1.0.11-sdk22-debug.apk
+   pm install -r --bypass-low-target-sdk-block /storage/emulated/0/Download/GalaxyTuner-v1.0.12-sdk22-debug.apk
    ```
 3. 이미 sdk34판이 Shizuku에 연결되어 있다면, 앱의 **업데이트** 카드에서 sdk22 APK를 내려받아
    **다운로드 및 설치**를 누르면 Shizuku 셸이 대신 설치합니다(`pm install -r --bypass-low-target-sdk-block -S <bytes>`).
 
 > 설치 후 Android가 "이전 버전용 앱" 경고를 띄울 수 있습니다. sdk22판의 정상 동작이며,
 > 주사율·최소 너비처럼 `Settings.System`만 쓰는 기능은 연결 없이 바로 동작합니다.
+
+## 1.0.12에서 바뀐 것
+
+### 잠자기 모드 — 상주 서비스를 접근성 서비스로 교체 (`실행 중인 앱` 표시 제거)
+
+- v1.0.11까지는 화면 꺼짐/켜짐을 **포그라운드 서비스**(`QuickDozeService`)로 받았습니다. 그래서
+  알림을 꺼도 삼성 One UI의 **'실행 중인 앱'** 목록에 계속 떴습니다.
+- 이제 화면 이벤트는 **`AccessibilityService`**(`QuickDozeAccessibilityService`)가 받습니다. 시스템이
+  직접 바인딩하므로 **포그라운드 서비스도, 알림도, '실행 중인 앱' 표시도 없습니다**(Galaxy Max Hz와
+  같은 방식). `FOREGROUND_SERVICE` 권한 2종은 매니페스트에서 뺐습니다.
+- 접근성 설정(`res/xml/accessibility_quick_doze.xml`)은 **창 내용 읽기 꺼짐**
+  (`canRetrieveWindowContent="false"`), 제스처·키 이벤트 플래그 없음. `onAccessibilityEvent`는 비어
+  있어서 화면에 보이는 것을 읽지 않습니다. 쓰는 것은 화면 꺼짐/켜짐 브로드캐스트뿐입니다.
+- **켤 때**: `WRITE_SECURE_SETTINGS`가 있으면 기존 `ENABLED_ACCESSIBILITY_SERVICES` 목록을 **덮어쓰지
+  않고** 우리 컴포넌트만 뒤에 `:`로 붙이고 `ACCESSIBILITY_ENABLED=1`을 씁니다. 그 뒤 3초 안에 시스템이
+  서비스를 붙이는지 확인합니다.
+  - 붙으면 그대로 켜짐.
+  - 시스템이 막거나(제한된 설정 등) 붙지 않으면 **접근성 설정 화면을 열고** "설치된 앱에서 Galaxy
+    Tuner를 켜 주세요" 안내를 띄웁니다. 토글이 흐리면 앱 정보 ⋮ → '제한된 설정 허용'을 먼저 눌러야
+    합니다. 배터리 탭 스위치 아래에도 **접근성 설정 열기** 버튼이 생깁니다.
+- **끌 때**: 목록에서 **우리 컴포넌트만** 빼고(다른 접근성 서비스는 그대로), 남은 항목이 없을 때만
+  `ACCESSIBILITY_ENABLED=0`으로 되돌립니다. `low_power`·`battery_saver_constants` 복원은 v1.0.11과
+  같습니다.
+- v1.0.11의 `QuickDozeService`는 **빈 컴포넌트로만 남겨** 업그레이드 직후 `stopService`로 정리하고,
+  실수로 시작돼도 즉시 스스로 종료합니다(알림 없음). 앱 실행·부팅·스위치 전환 때마다 정리합니다.
+- `battery_saver_constants`의 `quick_doze_enabled=true`와 `low_power` 토글/복원 로직은 그대로입니다.
+
+### 기타 탭 — 카메라 셔터음 무음
+
+- **위치**: 기타 탭 **맨 위**로 올려 열자마자 보이게 했습니다(예전에는 Shizuku 카드와 권한 카드 사이).
+- **문구·방향**: 섹션 `카메라 셔터음 무음`, 스위치 `셔터음 무음`. **켜짐 = 무음**
+  (`csc_pref_camera_forced_shuttersound_key=0`, "켜짐 · 소리 없이 촬영해요"), **꺼짐 = 소리 남**
+  (`1`, "꺼짐 · 촬영할 때 소리가 나요"). 스낵바 문구도 같은 말투로 맞췄습니다.
 
 ## 1.0.11에서 고친 것
 
@@ -190,7 +223,8 @@ com.android.org.conscrypt.Conscrypt.exportKeyingMaterial`이 났습니다. libad
 - **배터리 건강도**: `dumpsys battery`의 삼성 전용 필드에서 BSOH(효율), ASOC, 충전 사이클, 최초 사용일,
   충전량·온도·상태를 읽습니다. 사이클은 `mSavedBatteryUsage / 100` 회입니다.
 - **배터리 보호**: `protect_battery`(0 사용 안 함 / 1 최대 보호 80·85·90·95% / 2 시스템 관리 / 3 표준).
-- **절전 옵션**: 적응형 배터리, **잠자기 모드(Quick-Doze)** (`battery_saver_constants` + 화면 꺼짐/켜짐 연동 서비스),
+- **절전 옵션**: 적응형 배터리, **잠자기 모드(Quick-Doze)** (`battery_saver_constants` + 화면 꺼짐/켜짐을
+  받는 접근성 서비스, 알림 없음),
   자동 동기화(`ContentResolver.setMasterSyncAutomatically`).
 
 ### 탭 4 · 기타
@@ -239,8 +273,8 @@ export JAVA_HOME=/path/to/jdk-17
 export ANDROID_HOME=/path/to/android-sdk   # platforms;android-34, build-tools;34.0.0
 gradle assembleSdk34Debug assembleSdk22Debug
 # 결과
-#   app/build/outputs/apk/sdk34/debug/app-sdk34-debug.apk  -> GalaxyTuner-v1.0.11-sdk34-debug.apk
-#   app/build/outputs/apk/sdk22/debug/app-sdk22-debug.apk  -> GalaxyTuner-v1.0.11-sdk22-debug.apk
+#   app/build/outputs/apk/sdk34/debug/app-sdk34-debug.apk  -> GalaxyTuner-v1.0.12-sdk34-debug.apk
+#   app/build/outputs/apk/sdk22/debug/app-sdk22-debug.apk  -> GalaxyTuner-v1.0.12-sdk22-debug.apk
 ```
 
 의존성: Jetpack Compose(Material 3), Shizuku API 13.1.5, 무선 디버깅 페어링·TLS 연결을 위해
@@ -268,7 +302,8 @@ gradle assembleSdk34Debug assembleSdk22Debug
   사용자가 직접 켜 둔 절전 모드는 건드리지 않습니다.
 - 빠른 잠자기(`quick_doze_enabled`)는 AOSP `BatterySaverPolicy` 기준 동작이라, 삼성 펌웨어 개조에 따라
   효과가 다를 수 있습니다. **실기기 검증 전입니다.**
-- 상주 서비스는 `specialUse` foreground service라 켜 둔 동안 알림이 하나 유지됩니다(알림 권한을 끈
-  경우엔 표시되지 않지만 서비스는 계속 동작).
+- 잠자기 모드는 **접근성 서비스**로 화면 이벤트를 받으므로 알림도, '실행 중인 앱' 표시도 없습니다.
+  대신 폰이 접근성 목록에서 이 앱을 한 번 허용해야 하며, 앱이 자동으로 켜지 못하는 기기(제한된 설정)
+  에서는 설정 화면에서 직접 켜야 합니다.
 - `wm size`·`wm density`로 바꾼 값은 재부팅하면 원래대로 돌아갑니다.
 - 셔터음은 통신사/지역 펌웨어 정책에 따라 카메라 앱이 무시할 수 있습니다.

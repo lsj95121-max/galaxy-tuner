@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  잠자기 모드 전용 접근성 서비스.
+
+  화면이 꺼지고 켜지는 순간만 알면 되므로 창 내용을 읽지도, 화면을 조작하지도 않습니다.
+  canRetrieveWindowContent=false 이고 제스처·키 이벤트 플래그도 쓰지 않습니다.
+  앱은 onAccessibilityEvent에서 아무것도 읽지 않습니다.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/accessibility_quick_doze_description"
+    android:notificationTimeout="1000"
+    android:summary="@string/accessibility_quick_doze_summary" />

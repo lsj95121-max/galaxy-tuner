@@ -13,9 +13,8 @@
     <!-- The update card installs the APK it downloads. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
-    <!-- 잠자기 모드 (Quick-Doze): a small resident service follows the screen on/off broadcasts. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 잠자기 모드 (Quick-Doze): an accessibility service follows the screen on/off broadcasts, so
+         no foreground service and no notification are needed (nothing shows in '실행 중인 앱'). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Needed on Android 11+ to find and open the Shizuku app, and to hand an APK to the
@@ -58,17 +57,28 @@
             </intent-filter>
         </activity>
 
-        <!-- 잠자기 모드: turns battery saver on while the screen is off so the phone falls into
-             quick doze within seconds, and puts it back when the screen comes on. -->
+        <!-- 잠자기 모드: the system binds this accessibility service, which listens for the screen
+             on/off broadcasts and turns battery saver on for the few seconds the phone needs to fall
+             into quick doze. Window content stays off (see res/xml/accessibility_quick_doze.xml). -->
+        <service
+            android:name=".QuickDozeAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_quick_doze" />
+        </service>
+
+        <!-- The v1.0.11 foreground service, kept only so an upgrade can stop it; it stops itself
+             immediately and never shows a notification. -->
         <service
             android:name=".QuickDozeService"
             android:exported="false"
-            android:foregroundServiceType="specialUse"
-            android:stopWithTask="false">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="화면이 꺼질 때 절전을 켜 잠자기 진입을 앞당기는 상주 서비스" />
-        </service>
+            android:stopWithTask="false" />
 
         <receiver
             android:name=".QuickDozeBootReceiver"

@@ -1,25 +1,22 @@
 package com.sangjun.galaxytuner
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
+import android.accessibilityservice.AccessibilityService
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
-import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.app.NotificationCompat
+import android.view.accessibility.AccessibilityEvent
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 
 /**
- * 잠자기 모드(Quick-Doze) — the Android 12+ way.
+ * 잠자기 모드(Quick-Doze) — the Android 12+ way, kept alive by an AccessibilityService.
  *
  * `device_idle_constants` is deprecated and no longer stored on recent One UI builds (writing it
  * leaves the switch off because reading it back returns null). The platform's own battery saver
@@ -27,16 +24,22 @@ import androidx.core.content.ContextCompat
  * its short STATE_QUICK_DOZE_DELAY path (the same key Galaxy Max Hz writes).
  *
  * So the flow is:
- *  1. 켤 때: the value of `battery_saver_constants` is backed up, `quick_doze_enabled=true` is
- *     merged into it, and the resident service is started.
+ *  1. 켤 때: the value of `battery_saver_constants` is backed up and `quick_doze_enabled=true` is
+ *     merged into it; the accessibility service (below) is allowed once so it stays bound.
  *  2. 화면이 꺼지면: `low_power` (the battery saver switch) is turned on — its previous value is
  *     kept — and the system enters quick doze within seconds.
  *  3. 화면이 켜지면: `low_power` goes back to what it was (0 stays 0, an already-on battery saver
  *     stays on).
- *  4. 끌 때: the service stops, `low_power` is restored if it is still ours, and
- *     `battery_saver_constants` goes back to the backed-up value (or is deleted again).
+ *  4. 끌 때: the accessibility service is taken out of the enabled list again, `low_power` is
+ *     restored if it is still ours, and `battery_saver_constants` goes back to the backed-up
+ *     value (or is deleted again).
  *
- * Everything here writes Settings.Global with the app's own WRITE_SECURE_SETTINGS, so the service
+ * The screen on/off listener used to live in a small foreground service. That service had to keep
+ * a notification, so One UI kept listing the app under "실행 중인 앱" even with the notification
+ * hidden. An AccessibilityService is bound by the system instead: no foreground service, no
+ * notification, and nothing in that list — which is how Galaxy Max Hz does it too.
+ *
+ * Everything here writes Settings.Global with the app's own WRITE_SECURE_SETTINGS, so the feature
  * needs no Shizuku and no ADB connection while it runs.
  */
 object QuickDoze {
@@ -58,6 +61,10 @@ object QuickDoze {
     /** The wrong key v1.0.9 wrote; stripped wherever it is met so it cannot linger. */
     private const val LEGACY_QUICK_DOZE_FLAG = "enable_quick_doze"
     private const val ABSENT = "__absent__"
+
+    /** How long the system gets to bind the accessibility service after it is allowed. */
+    private const val BIND_WAIT_STEPS = 12
+    private const val BIND_WAIT_MS = 250L
 
     fun prefs(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -117,10 +124,125 @@ object QuickDoze {
         true
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Accessibility service (the screen on/off listener)
+    // -----------------------------------------------------------------------------------------
+
+    fun serviceComponent(context: Context): ComponentName =
+        ComponentName(context.applicationContext, QuickDozeAccessibilityService::class.java)
+
+    private fun isOurComponent(flattened: String, context: Context): Boolean {
+        val parsed = ComponentName.unflattenFromString(flattened) ?: return false
+        val ours = serviceComponent(context)
+        return parsed.packageName == ours.packageName && parsed.className == ours.className
+    }
+
+    /** True when our accessibility service is listed in the system's enabled set. */
+    fun isAccessibilityEnabled(context: Context): Boolean {
+        val raw = try {
+            Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+        } catch (t: Throwable) {
+            null
+        } ?: return false
+        return raw.split(':').any { it.isNotBlank() && isOurComponent(it.trim(), context) }
+    }
+
+    /** True once the system has actually bound our service (screen events reach us). */
+    fun isAccessibilityConnected(): Boolean = QuickDozeAccessibilityService.connected
+
+    /**
+     * Adds or removes only our own entry in `ENABLED_ACCESSIBILITY_SERVICES`; every other
+     * accessibility service the user turned on stays exactly as it was. On the last removal the
+     * system-wide switch is put back to 0 as well.
+     */
+    private fun writeAccessibilityEnabled(context: Context, on: Boolean): Boolean = try {
+        val resolver = context.contentResolver
+        val current = Settings.Secure.getString(
+            resolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ).orEmpty()
+        val entries = current.split(':').map { it.trim() }.filter { it.isNotEmpty() }
+        val others = entries.filterNot { isOurComponent(it, context) }
+        val next = if (on) {
+            (others + serviceComponent(context).flattenToString()).joinToString(":")
+        } else {
+            others.joinToString(":")
+        }
+        // A null write does not delete the row on Android 17, so the empty list is written as "".
+        val written = Settings.Secure.putString(
+            resolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            next
+        )
+        if (!on && others.isEmpty()) {
+            Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
+        } else {
+            Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+        }
+        written
+    } catch (t: Throwable) {
+        false
+    }
+
+    /** What [ensureAccessibility] ended up with. */
+    enum class Accessibility {
+        /** The system has the service bound; screen events reach it. */
+        CONNECTED,
+
+        /** Allowed in the settings list but not bound yet (the system usually binds it shortly). */
+        ENABLED,
+
+        /** The phone still wants its own one-time allow; the switch cannot work until then. */
+        NEEDS_ALLOW
+    }
+
+    /**
+     * Allows the accessibility service without asking the user when WRITE_SECURE_SETTINGS is there,
+     * then waits a few seconds for the system to bind it. [Accessibility.NEEDS_ALLOW] is the case
+     * the caller has to explain, because only the phone's own settings screen can finish it.
+     */
+    suspend fun ensureAccessibility(context: Context, canWrite: Boolean): Accessibility {
+        if (isAccessibilityConnected()) return Accessibility.CONNECTED
+        if (!canWrite) return Accessibility.NEEDS_ALLOW
+        val allowed = if (isAccessibilityEnabled(context)) true
+        else writeAccessibilityEnabled(context, on = true)
+        repeat(BIND_WAIT_STEPS) {
+            if (isAccessibilityConnected()) return Accessibility.CONNECTED
+            delay(BIND_WAIT_MS)
+        }
+        return when {
+            !allowed -> Accessibility.NEEDS_ALLOW
+            isAccessibilityEnabled(context) -> Accessibility.ENABLED
+            else -> Accessibility.NEEDS_ALLOW
+        }
+    }
+
+    /** Opens the phone's accessibility screen, where our service is allowed with one switch. */
+    fun openAccessibilityScreen(): String? {
+        val context = AppCtx.context ?: return "앱 정보를 읽지 못했어요."
+        return try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            null
+        } catch (t: Throwable) {
+            "접근성 설정을 열지 못했어요. 설정 > 접근성 > 설치된 앱에서 Galaxy Tuner를 켜 주세요."
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The switch itself
+    // -----------------------------------------------------------------------------------------
+
     /**
      * Turns the feature on: keeps the current `battery_saver_constants`, adds the quick-doze flag,
-     * starts the resident service and applies the screen-off step right away when the screen is
-     * already off. Returns null on success or a message for the snackbar.
+     * clears the v1.0.11 foreground service out of the way and applies the screen-off step right
+     * away when the screen is already off. The accessibility service is allowed by the caller
+     * ([ensureAccessibility]) because that part has to wait for the system.
+     * Returns null on success or a message for the snackbar.
      */
     fun enable(context: Context, canWrite: Boolean): String? {
         if (!canWrite) {
@@ -139,14 +261,15 @@ object QuickDoze {
             return "잠자기 모드 설정을 쓰지 못했어요."
         }
         store.edit().putBoolean(KEY_ENABLED, true).apply()
-        start(context)
+        stopLegacyService(context)
         if (!isInteractive(context)) onScreenOff(context)
         return null
     }
 
     /**
-     * Turns the feature off: stops the service, puts `low_power` back if it is still ours and
-     * restores the original `battery_saver_constants` (deleting the key when there was none).
+     * Turns the feature off: takes our accessibility service back out of the enabled list, puts
+     * `low_power` back if it is still ours and restores the original `battery_saver_constants`
+     * (deleting the key when there was none).
      *
      * When there was no backup the row is deleted with a content-resolver delete, because a null
      * write is ignored on Android 17; if the flag survives that, it is cut out of whatever the row
@@ -154,12 +277,14 @@ object QuickDoze {
      */
     fun disable(context: Context, canWrite: Boolean): String? {
         val store = prefs(context)
-        stop(context)
+        stopLegacyService(context)
         store.edit().putBoolean(KEY_ENABLED, false).apply()
         if (!canWrite) {
             store.edit().remove(KEY_BSAVER_BACKUP).apply()
             return null
         }
+        // Nothing is left for the accessibility service to do once the switch is off.
+        if (isAccessibilityEnabled(context)) writeAccessibilityEnabled(context, on = false)
         restoreLowPower(context)
         val saved = store.getString(KEY_BSAVER_BACKUP, null)
         // A backup taken before the switch was turned on normally has no flag; it is stripped
@@ -250,21 +375,12 @@ object QuickDoze {
             .apply()
     }
 
-    /** Starts the resident service; harmless when it is already running. */
-    fun start(context: Context) {
-        val intent = Intent(context, QuickDozeService::class.java)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-        } catch (t: Throwable) {
-            // A background start can be refused; the app tries again next time it opens.
-        }
-    }
-
-    fun stop(context: Context) {
+    /**
+     * v1.0.11 kept a foreground service running for the screen listener. It is gone in v1.0.12, but
+     * an install that updates over v1.0.11 can still have the old one up until the package is
+     * replaced — so it is stopped wherever the app gets a chance.
+     */
+    fun stopLegacyService(context: Context) {
         try {
             context.stopService(Intent(context, QuickDozeService::class.java))
         } catch (t: Throwable) {
@@ -272,136 +388,132 @@ object QuickDoze {
         }
     }
 
-    /** Keeps the service in step with the stored switch, called when the app opens. */
+    /**
+     * Best-effort: puts our entry back into the enabled list without waiting and without opening a
+     * screen. Used on boot/update and when the app opens with the switch on.
+     */
+    internal fun restoreAccessibilityEntry(context: Context) {
+        if (isAccessibilityEnabled(context)) return
+        writeAccessibilityEnabled(context, on = true)
+    }
+
+    /** Keeps the feature in step with the stored switch, called when the app opens. */
     fun sync(context: Context) {
-        if (isEnabled(context)) start(context) else stop(context)
+        stopLegacyService(context)
+        if (!isEnabled(context)) return
+        // The system normally keeps the binding across restarts; when the entry was lost (an update
+        // can drop it) it is put back here without opening any screen.
+        if (!isAccessibilityEnabled(context) && Access.hasSecureWrite()) {
+            restoreAccessibilityEntry(context)
+        }
     }
 }
 
 /**
- * The small resident service behind the switch. It holds one screen on/off receiver and nothing
- * else: no wake lock, no polling, and a low-importance notification that says what is going on.
+ * The screen on/off listener, bound by the system as an accessibility service.
+ *
+ * It reads nothing and controls nothing: the config XML turns window content off, and
+ * [onAccessibilityEvent] is empty. Only the screen on/off broadcasts are used, and the whole
+ * screen-off step is a couple of Settings writes in [QuickDoze].
  */
-class QuickDozeService : Service() {
+class QuickDozeAccessibilityService : AccessibilityService() {
 
     private var screenReceiver: BroadcastReceiver? = null
 
-    override fun onCreate() {
-        super.onCreate()
-        createChannel()
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        connected = true
+        registerScreenReceiver()
+        // A fresh binding (reboot, update, re-allow) may meet battery saver still on from an earlier
+        // cycle, so the saved value is put back once when the screen is already on.
+        val power = getSystemService(PowerManager::class.java)
+        if (power?.isInteractive == true) QuickDoze.onScreenOn(this)
+    }
+
+    private fun registerScreenReceiver() {
+        if (screenReceiver != null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
-                    Intent.ACTION_SCREEN_OFF -> QuickDoze.onScreenOff(this@QuickDozeService)
-                    Intent.ACTION_SCREEN_ON -> QuickDoze.onScreenOn(this@QuickDozeService)
+                    Intent.ACTION_SCREEN_OFF -> QuickDoze.onScreenOff(this@QuickDozeAccessibilityService)
+                    Intent.ACTION_SCREEN_ON -> QuickDoze.onScreenOn(this@QuickDozeAccessibilityService)
                 }
             }
         }
-        screenReceiver = receiver
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
         }
-        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        try {
+            ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            screenReceiver = receiver
+        } catch (t: Throwable) {
+            // The binding can go away while registering; the next connection registers again.
+        }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!QuickDoze.isEnabled(this)) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        // A service started with startForegroundService() has to report a notification within a few
-        // seconds, so a refused foreground start ends the service here instead of being retried in
-        // the background.
-        if (!showForeground()) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        // A restart (or the app's own start) may find battery saver left on while the screen is
-        // already back on, so the saved value is put back once here.
-        val power = getSystemService(PowerManager::class.java)
-        if (power?.isInteractive == true) QuickDoze.onScreenOn(this)
-        return START_STICKY
-    }
-
-    override fun onDestroy() {
+    private fun unregisterScreenReceiver() {
         screenReceiver?.let { receiver ->
             runCatching { unregisterReceiver(receiver) }
         }
         screenReceiver = null
+    }
+
+    /** Nothing to read: the service exists only for the screen on/off broadcasts. */
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+
+    override fun onInterrupt() = Unit
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        connected = false
+        unregisterScreenReceiver()
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        connected = false
+        unregisterScreenReceiver()
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val manager = getSystemService(NotificationManager::class.java) ?: return
-        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "잠자기 모드",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "화면이 꺼질 때 잠깐 절전을 켜는 동안 표시돼요"
-            setShowBadge(false)
-            enableVibration(false)
-            setSound(null, null)
-        }
-        manager.createNotificationChannel(channel)
-    }
-
-    private fun notification(): Notification {
-        val open = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_tab_battery)
-            .setContentTitle("잠자기 모드 (빠른 진입)")
-            .setContentText("화면이 꺼지면 절전을 잠깐 켜서 바로 잠자기로 들어가요")
-            .setContentIntent(open)
-            .setOngoing(true)
-            .setShowWhen(false)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setSilent(true)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .build()
-    }
-
-    /** Returns false when the foreground start was refused, so the caller can stop the service. */
-    private fun showForeground(): Boolean {
-        val notification = notification()
-        return try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-            true
-        } catch (t: Throwable) {
-            false
-        }
-    }
-
     companion object {
-        private const val CHANNEL_ID = "quick_doze"
-        private const val NOTIFICATION_ID = 4109
+        /** True while the system has the service bound. Read by the switch screen. */
+        @Volatile
+        var connected: Boolean = false
+            private set
     }
 }
 
-/** Restarts the resident service after a reboot or an update while the switch is on. */
+/**
+ * The v1.0.11 foreground service, kept as an empty component only so an upgrade can stop it and so
+ * no old intent can start something that would show up again. It never starts a foreground
+ * notification: anything that reaches it ends immediately.
+ */
+class QuickDozeService : Service() {
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        stopSelf()
+        return START_NOT_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+}
+
+/** Restarts the binding after a reboot or an update while the switch is on. */
 class QuickDozeBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                if (QuickDoze.isEnabled(context)) QuickDoze.start(context)
+                QuickDoze.stopLegacyService(context)
+                if (!QuickDoze.isEnabled(context)) return
+                // The accessibility entry usually survives a reboot, but an app update can drop it;
+                // putting it back here saves the user from allowing it again (other services keep
+                // their place in the list).
+                if (!QuickDoze.isAccessibilityEnabled(context)) {
+                    QuickDoze.restoreAccessibilityEntry(context)
+                }
+                val power = context.getSystemService(PowerManager::class.java)
+                if (power?.isInteractive == true) QuickDoze.onScreenOn(context)
             }
         }
     }

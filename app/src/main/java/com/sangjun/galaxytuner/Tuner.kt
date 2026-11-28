@@ -152,8 +152,10 @@ data class ExtrasInfo(
     val adaptiveBattery: String?,
     val autoSync: Boolean?,
     val batterySaverConstants: String?,
-    /** The switch as the app remembers it: true while the resident service is meant to be on. */
-    val quickDozeEnabled: Boolean = false
+    /** The switch as the app remembers it: true while the accessibility service is meant to be on. */
+    val quickDozeEnabled: Boolean = false,
+    /** True when our accessibility service is listed in the system's enabled set. */
+    val dozeAccessibilityEnabled: Boolean = false
 ) {
     val animationScale: String? get() = windowScale ?: transitionScale ?: animatorScale
 
@@ -164,11 +166,15 @@ data class ExtrasInfo(
      * The 잠자기 모드 switch.
      *
      * The stored switch is the primary source, because Android 17 / One UI 9 clears
-     * `battery_saver_constants` moments after it is written while `QuickDozeService` keeps running.
+     * `battery_saver_constants` moments after it is written while the accessibility service keeps
+     * running.
      * The flag in `battery_saver_constants` still counts as on, so a flag set outside the app (or
      * one that survived a preference reset) is shown too.
      */
     val quickDoze: Boolean get() = quickDozeEnabled || QuickDoze.hasQuickDoze(batterySaverConstants)
+
+    /** Switch is on but the phone has not allowed the accessibility service yet. */
+    val dozeNeedsAccessibility: Boolean get() = quickDoze && !dozeAccessibilityEnabled
 
     val protectionLabel: String
         get() = when (protectMode) {
@@ -1020,7 +1026,9 @@ object Tuner {
                 adaptiveBattery = values["adaptive"],
                 autoSync = autoSync,
                 batterySaverConstants = values["bsaver"],
-                quickDozeEnabled = AppCtx.context?.let { QuickDoze.isEnabled(it) } == true
+                quickDozeEnabled = AppCtx.context?.let { QuickDoze.isEnabled(it) } == true,
+                dozeAccessibilityEnabled = AppCtx.context
+                    ?.let { QuickDoze.isAccessibilityEnabled(it) } == true
             ),
             null
         )
@@ -1029,7 +1037,8 @@ object Tuner {
     suspend fun applyShutter(value: Int): String {
         if (!canWriteSettings()) return needsShizuku()
         return if (applyOps(listOf(Op.Put("system", SHUTTER_KEY, value.toString())))) {
-            if (value == 0) "셔터음 끄기 적용 완료" else "강제 셔터음 적용 완료"
+            if (value == 0) "셔터음 무음 켜짐 · 소리 없이 촬영해요"
+            else "셔터음 무음 꺼짐 · 촬영할 때 소리가 나요"
         } else {
             "셔터음을 바꾸지 못했어요."
         }
@@ -1092,9 +1101,14 @@ object Tuner {
      *
      * `device_idle_constants` is deprecated from Android 12 on and recent One UI builds no longer
      * store it, so the switch works through `battery_saver_constants`' `quick_doze_enabled` flag and
-     * the small resident service in [QuickDoze] that turns battery saver on while the screen is off
+     * the accessibility service in [QuickDoze] that turns battery saver on while the screen is off
      * and puts it back when the screen comes on. Everything is a plain Settings.Global write, so the
      * one-time WRITE_SECURE_SETTINGS grant is all it needs.
+     *
+     * The screen listener is an accessibility service now (a foreground service kept showing up in
+     * One UI's '실행 중인 앱' list). Turning the switch on tries to allow it through secure settings
+     * first; when the phone refuses or does not bind it, the accessibility screen is opened with an
+     * instruction instead.
      */
     suspend fun setQuickDoze(on: Boolean): String {
         val context = AppCtx.context ?: return "앱 정보를 읽지 못했어요."
@@ -1103,6 +1117,21 @@ object Tuner {
                 return "잠자기 모드는 설정 권한(1회)이 있어야 켤 수 있어요. 기타 탭에서 설정 권한을 받은 뒤 다시 켜 주세요."
             }
             QuickDoze.enable(context, canWrite = true)?.let { return it }
+            when (QuickDoze.ensureAccessibility(context, canWrite = true)) {
+                QuickDoze.Accessibility.NEEDS_ALLOW -> {
+                    // The switch and the flag are set; only the one-time allow is missing, so the
+                    // phone's accessibility screen is opened with a message saying what to do.
+                    val failed = QuickDoze.openAccessibilityScreen()
+                    return failed
+                        ?: "잠자기 모드 설정은 켰어요. 방금 연 접근성 설정의 '설치된 앱'에서 Galaxy Tuner를 켜 주세요. 항목이 흐리게 보이면 앱 정보 ⋮ → '제한된 설정 허용'을 먼저 눌러 주세요."
+                }
+                QuickDoze.Accessibility.ENABLED -> {
+                    // Allowed but not bound yet; the system normally binds it within moments, so the
+                    // mode is reported on with one line about what to check if it stays silent.
+                    return "잠자기 모드 켜짐 · 접근성 서비스가 붙는 데 잠깐 걸릴 수 있어요. 계속 안 되면 접근성 설정에서 Galaxy Tuner가 켜져 있는지 확인해 주세요."
+                }
+                QuickDoze.Accessibility.CONNECTED -> Unit
+            }
             // The system may blank `battery_saver_constants` right after the write, so the stored
             // switch (and the service it starts) is what tells whether the mode is on.
             return if (QuickDoze.isEnabled(context) || QuickDoze.hasQuickDoze(readDirect("global", BATTERY_SAVER_CONSTANTS))) {

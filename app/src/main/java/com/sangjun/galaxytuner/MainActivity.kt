@@ -382,6 +382,11 @@ private fun TunerApp(theme: AppTheme, onThemeChange: (AppTheme) -> Unit) {
                         },
                         onAdaptive = { on -> act { Tuner.setAdaptiveBattery(on) } },
                         onDoze = { on -> act { Tuner.setQuickDoze(on) } },
+                        onOpenAccessibility = {
+                            val message = QuickDoze.openAccessibilityScreen()
+                                ?: "접근성 설정을 열었어요. '설치된 앱'에서 Galaxy Tuner를 켜 주세요."
+                            scope.launch { snackbar.showSnackbar(message) }
+                        },
                         onAutoSync = { on -> act { Tuner.setAutoSync(on) } },
                         onReloadBattery = { scope.launch { battery = Tuner.readBattery() } }
                     )
@@ -1490,6 +1495,7 @@ private fun BatteryTab(
     onProtect: (Int, Int?) -> Unit,
     onAdaptive: (Boolean) -> Unit,
     onDoze: (Boolean) -> Unit,
+    onOpenAccessibility: () -> Unit,
     onAutoSync: (Boolean) -> Unit,
     onReloadBattery: () -> Unit
 ) {
@@ -1591,7 +1597,15 @@ private fun BatteryTab(
                     need = Need.ONCE,
                     onCheckedChange = onDoze
                 )
-                Hint("화면이 꺼지면 절전을 잠깐 켜서 몇 초 만에 깊은 잠자기로 들어가고, 화면을 켜면 원래대로 돌아와요. 켜 둔 동안 알림이 하나 유지돼요(알림을 끈 경우엔 보이지 않아요).")
+                Hint("화면이 꺼지면 절전을 잠깐 켜서 몇 초 만에 깊은 잠자기로 들어가고, 화면을 켜면 원래대로 돌아와요. 화면 꺼짐을 감지하려고 접근성 서비스를 1회 허용하며, 알림이나 '실행 중인 앱' 표시는 없어요.")
+                if (sheet.dozeNeedsAccessibility) {
+                    Hint("접근성 서비스가 아직 허용되지 않아 화면 꺼짐을 감지하지 못해요. 한 번만 켜 주세요.")
+                    OutlinedButton(
+                        onClick = onOpenAccessibility,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+                    ) { Text("접근성 설정 열기", fontSize = 13.sp) }
+                }
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 SwitchRow(
                     title = "자동 동기화",
@@ -1629,6 +1643,31 @@ private fun MoreTab(
     val shellReady = shizuku.ready || adb.connected
 
     TabContent {
+        // 카메라 셔터음 무음 — 기타 탭 맨 위: 열자마자 눈에 들어오고, 켜짐(ON)이 '무음'이다.
+        SectionCard(
+            title = "카메라 셔터음 무음",
+            subtitle = "촬영할 때 나는 소리를 끌 수 있어요",
+            need = Need.ONCE
+        ) {
+            if (sheet == null) {
+                LoadingHint(extras)
+            } else {
+                val muted = sheet.shutter == "0"
+                SwitchRow(
+                    title = "셔터음 무음",
+                    subtitle = when (sheet.shutter) {
+                        "0" -> "켜짐 · 소리 없이 촬영해요"
+                        "1" -> "꺼짐 · 촬영할 때 소리가 나요"
+                        else -> "꺼짐 · 아직 바꾸지 않았어요"
+                    },
+                    checked = muted,
+                    enabled = !busy,
+                    onCheckedChange = { on -> onShutter(if (on) 0 else 1) }
+                )
+                Hint("통신사·지역 설정에 따라 카메라 앱이 이 설정을 무시할 수 있어요.")
+            }
+        }
+
         UpdateCard(notify = notify)
 
         WirelessAdbCard(adb = adb, notify = notify)
@@ -1657,26 +1696,6 @@ private fun MoreTab(
                     "Shizuku 앱에서 '무선 디버깅으로 시작'을 누르거나, 위 무선 디버깅(ADB) 카드에서 폰 안에서 직접 페어링하면 됩니다."
                 }
             )
-        }
-
-        SectionCard(title = "카메라", subtitle = "셔터 소리를 끌 수 있어요", need = Need.ONCE) {
-            if (sheet == null) {
-                LoadingHint(extras)
-            } else {
-                val forced = sheet.shutter == "1"
-                SwitchRow(
-                    title = "강제 셔터음",
-                    subtitle = when (sheet.shutter) {
-                        "1" -> "켜짐 · 촬영할 때 소리가 나요"
-                        "0" -> "꺼짐 · 소리 없이 촬영해요"
-                        else -> "기본값"
-                    },
-                    checked = forced,
-                    enabled = !busy,
-                    onCheckedChange = { on -> onShutter(if (on) 1 else 0) }
-                )
-                Hint("통신사·지역 설정에 따라 카메라 앱이 이 설정을 무시할 수 있어요.")
-            }
         }
 
         SectionCard(
@@ -1793,7 +1812,7 @@ private fun MoreTab(
                     "잠자기 모드 (빠른 진입)",
                     "카메라 셔터음 무음"
                 ),
-                note = "Shizuku나 무선 디버깅으로 한 번만 설정 권한(WRITE_SECURE_SETTINGS)을 받으면 그 뒤엔 연결 없이 동작해요."
+                note = "Shizuku나 무선 디버깅으로 한 번만 설정 권한(WRITE_SECURE_SETTINGS)을 받으면 그 뒤엔 연결 없이 동작해요. 잠자기 모드는 화면 꺼짐을 감지하는 접근성 서비스도 한 번 허용해요(알림은 없어요)."
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             NeedGroup(
